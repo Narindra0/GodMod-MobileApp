@@ -1,0 +1,110 @@
+
+import sqlite3
+import logging
+from datetime import datetime
+from . import config
+from .database import get_db_connection
+
+logger = logging.getLogger(__name__)
+
+SESSION_MAX_DAYS = 37
+
+def get_active_session():
+    """
+    Récupère la session active actuelle.
+    Si aucune session n'est active, en crée une nouvelle.
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, current_day, capital_initial FROM sessions WHERE status = 'ACTIVE' LIMIT 1")
+        row = cursor.fetchone()
+        
+        if row:
+            return {
+                'id': row[0],
+                'current_day': row[1],
+                'capital_initial': row[2]
+            }
+        else:
+            # Créer la toute première session si la table est vide
+            return create_new_session()
+
+def create_new_session(previous_capital=None):
+    """
+    Crée une nouvelle session et ferme l'ancienne si elle existe.
+    Le score PRISMA est conservé d'une session à l'autre.
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        
+        # 1. Fermer la session active actuelle et récupérer les scores
+        cursor.execute("SELECT id, capital_initial, score_prisma FROM sessions WHERE status = 'ACTIVE' LIMIT 1")
+        active = cursor.fetchone()
+        
+        capital_to_use = previous_capital or 20000
+        prisma_to_use = 200 # Valeur par défaut pour la toute première session
+        
+        if active:
+            active_id = active[0]
+            prisma_to_use = active[2] # On récupère le score PRISMA actuel
+            
+            # Calculer le capital final à partir de l'historique_paris
+            cursor.execute("SELECT bankroll_apres FROM historique_paris WHERE session_id = ? ORDER BY id_pari DESC LIMIT 1", (active_id,))
+            last_bankroll = cursor.fetchone()
+            capital_final = last_bankroll[0] if last_bankroll else active[1]
+            capital_to_use = capital_final
+            
+            cursor.execute("""
+                UPDATE sessions 
+                SET status = 'CLOSED', 
+                    timestamp_fin = CURRENT_TIMESTAMP,
+                    capital_final = ?
+                WHERE id = ?
+            """, (capital_final, active_id))
+            logger.info(f"Session {active_id} fermée (Capital: {capital_final}, Score PRISMA: {prisma_to_use})")
+
+        # 2. Ouvrir la nouvelle session en reportant le score PRISMA
+        cursor.execute("""
+            INSERT INTO sessions (timestamp_debut, status, current_day, capital_initial, type_session, score_zeus, score_prisma)
+            VALUES (CURRENT_TIMESTAMP, 'ACTIVE', 1, ?, 'PRODUCTION', 0, ?)
+        """, (capital_to_use, prisma_to_use))
+        
+        new_id = cursor.lastrowid
+        conn.commit()
+        logger.info(f"Nouvelle session {new_id} créée (Jour 1, Capital: {capital_to_use}, Score PRISMA: {prisma_to_use})")
+        
+        return {
+            'id': new_id,
+            'current_day': 1,
+            'capital_initial': capital_to_use,
+            'score_prisma': prisma_to_use
+        }
+
+def update_session_day(session_id, day_number):
+    """
+    Met à jour le jour actuel de la session.
+    Si le jour dépasse 37, déclenche la transition.
+    """
+    if day_number > SESSION_MAX_DAYS:
+        logger.info(f"Jour {day_number} atteint (Limite: {SESSION_MAX_DAYS}). Transition vers nouvelle session.")
+        return create_new_session()
+    
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE sessions SET current_day = ? WHERE id = ?", (day_number, session_id))
+        conn.commit()
+        logger.info(f"Session {session_id} mise à jour au jour {day_number}")
+        
+        return {
+            'id': session_id,
+            'current_day': day_number
+        }
+
+def get_current_session_day_count(session_id):
+    """
+    Compte combien de jours (rounds) ont été effectivement traités dans cette session.
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(DISTINCT journee) FROM matches WHERE session_id = ?", (session_id,))
+        return cursor.fetchone()[0]
