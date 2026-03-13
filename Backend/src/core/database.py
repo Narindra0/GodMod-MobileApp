@@ -1,55 +1,62 @@
 import sqlite3
 import logging
-from contextlib import contextmanager
+import threading
+from contextlib import contextmanager, nullcontext
 from . import config
 
-# Configuration du logging
 logger = logging.getLogger(__name__)
 
+_db_lock = threading.RLock()
+
+
 @contextmanager
-def get_db_connection():
+def get_db_connection(write: bool = False):
     """
     Context manager pour les connexions DB.
     Gère automatiquement l'ouverture, la configuration, le commit/rollback et la fermeture.
-    Améliore les performances avec WAL mode et assure la sécurité des transactions.
+    Ajoute un verrou logiciel optionnel pour sérialiser les écritures et éviter
+    les erreurs «database is locked» provoquées par plusieurs threads/process écrivant en même temps.
     """
-    conn = sqlite3.connect(config.DB_NAME)
-    conn.row_factory = sqlite3.Row  # Accès par nom de colonne
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")  # Améliore les performances en lecture/écriture
-    conn.execute("PRAGMA synchronous = NORMAL")  # Équilibre performance/sécurité
-    try:
-        yield conn
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        logger.error(f"Erreur DB, rollback effectué: {e}", exc_info=True)
-        raise
-    finally:
-        conn.close()
+    lock = _db_lock if write else nullcontext()
+    with lock:
+        conn = sqlite3.connect(config.DB_NAME, timeout=30.0, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA busy_timeout = 30000")
+        try:
+            yield conn
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Erreur DB, rollback effectué: {e}", exc_info=True)
+            raise
+        finally:
+            conn.close()
 
 def create_new_schema(conn):
     """Définit le nouveau schéma de la base de données organisé par sessions (v4)."""
     cursor = conn.cursor()
     
-    # 1. Table equipes (Référentiel global)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS equipes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nom TEXT UNIQUE NOT NULL
+        nom TEXT UNIQUE NOT NULL,
+        logo_url TEXT
     );
     """)
 
-    # 2. Table sessions (Le pivot de l'architecture)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS sessions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         timestamp_debut TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         timestamp_fin TIMESTAMP,
         status TEXT DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE', 'CLOSED')),
-        current_day INTEGER DEFAULT 1, -- Compteur de 1 à 37
+        current_day INTEGER DEFAULT 1,
         capital_initial INTEGER DEFAULT 20000,
         capital_final INTEGER,
+        profit_total INTEGER,
         version_ia TEXT,
         type_session TEXT DEFAULT 'PRODUCTION' CHECK(type_session IN ('TRAINING', 'EVALUATION', 'PRODUCTION')),
         score_zeus INTEGER DEFAULT 0,
@@ -57,12 +64,11 @@ def create_new_schema(conn):
     );
     """)
 
-    # 3. Table matches (Liée à une session)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS matches (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         session_id INTEGER NOT NULL,
-        journee INTEGER NOT NULL, -- Journée relative à la saison réelle (1-38)
+        journee INTEGER NOT NULL,
         equipe_dom_id INTEGER NOT NULL,
         equipe_ext_id INTEGER NOT NULL,
         cote_1 DECIMAL(5,2),
@@ -78,7 +84,6 @@ def create_new_schema(conn):
     );
     """)
 
-    # 4. Table classement (Liée à une session)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS classement (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -96,7 +101,6 @@ def create_new_schema(conn):
     );
     """)
 
-    # 5. Table predictions (Liée à une session)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS predictions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,7 +115,6 @@ def create_new_schema(conn):
     );
     """)
 
-    # 6. Table historique_paris (Liée à une session)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS historique_paris (
         id_pari INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -133,23 +136,43 @@ def create_new_schema(conn):
         FOREIGN KEY (prediction_id) REFERENCES predictions(id)
     );
     """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS pari_multiple (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL,
+        journee INTEGER NOT NULL,
+        mise_ar INTEGER NOT NULL,
+        cote_totale REAL NOT NULL,
+        bankroll_apres INTEGER,
+        resultat INTEGER,
+        profit_net INTEGER,
+        timestamp_pari TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (session_id) REFERENCES sessions(id)
+    );
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS pari_multiple_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pari_multiple_id INTEGER NOT NULL,
+        prediction_id INTEGER NOT NULL,
+        FOREIGN KEY (pari_multiple_id) REFERENCES pari_multiple(id),
+        FOREIGN KEY (prediction_id) REFERENCES predictions(id)
+    );
+    """)
     conn.commit()
 
 def initialiser_db():
     """Initialise la base de données avec la nouvelle structure par sessions."""
-    conn = sqlite3.connect(config.DB_NAME)
+    conn = sqlite3.connect(config.DB_NAME, timeout=30.0)
     cursor = conn.cursor()
     cursor.execute("PRAGMA foreign_keys = ON")
 
-    # Création des tables
     create_new_schema(conn)
 
-    # --- IMPORTANT : Initialisation des données de base ---
-    
-    # 1. Insérer les équipes si elles n'existent pas
     cursor.executemany('INSERT OR IGNORE INTO equipes (nom) VALUES (?)', [(e,) for e in config.EQUIPES])
     
-    # 2. Création des index pour optimiser les performances
     logger.info("Création des index SQL...")
     indexes = [
         "CREATE INDEX IF NOT EXISTS idx_matches_session ON matches(session_id)",
@@ -157,7 +180,10 @@ def initialiser_db():
         "CREATE INDEX IF NOT EXISTS idx_classement_session ON classement(session_id)",
         "CREATE INDEX IF NOT EXISTS idx_predictions_session ON predictions(session_id)",
         "CREATE INDEX IF NOT EXISTS idx_historique_session ON historique_paris(session_id)",
-        "CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status)"
+        "CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status)",
+        "CREATE INDEX IF NOT EXISTS idx_predictions_attente ON predictions(session_id, succes)",
+        "CREATE INDEX IF NOT EXISTS idx_classement_recherche ON classement(session_id, equipe_id, journee)",
+        "CREATE INDEX IF NOT EXISTS idx_matches_equipes ON matches(session_id, equipe_dom_id, equipe_ext_id)"
     ]
     
     for index_sql in indexes:
@@ -167,5 +193,6 @@ def initialiser_db():
     conn.close()
     logger.info(f"{len(indexes)} index crees avec succes.")
     print(f"Base de donnees '{config.DB_NAME}' initialisée (Architecture par Sessions v4).")
+
 if __name__ == "__main__":
     initialiser_db()

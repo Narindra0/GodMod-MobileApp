@@ -1,4 +1,5 @@
 import logging
+from typing import List, Dict
 import importlib
 import sys
 from ..core import config
@@ -7,7 +8,8 @@ from ..core.session_manager import get_active_session
 from ..prisma import engine as prisma_engine
 from ..prisma import selection as prisma_selection
 from ..zeus.models.inference import get_zeus_model, predire_pari_zeus, formater_decision_zeus
-from ..zeus.database.queries import get_matches_for_journee
+from ..zeus.database.queries import get_matches_for_journee, enregistrer_pari, valider_paris_zeus
+from . import multiple_bets
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +17,6 @@ def _reload_config():
     """Recharge le module config pour prendre en compte les changements depuis le dashboard."""
     if 'src.core.config' in sys.modules:
         importlib.reload(sys.modules['src.core.config'])
-        # Réassigner la référence locale
         globals()['config'] = sys.modules['src.core.config']
 
 def calculer_probabilite_avec_fallback(equipe_dom_id, equipe_ext_id, cote_1=None, cote_x=None, cote_2=None):
@@ -28,25 +29,32 @@ def calculer_probabilite_avec_fallback(equipe_dom_id, equipe_ext_id, cote_1=None
         logger.warning(f"Cotes manquantes pour match {equipe_dom_id} vs {equipe_ext_id}. Utilisation du calcul simple.")
         return calculer_probabilite(equipe_dom_id, equipe_ext_id)
 
-def calculer_probabilite(equipe_dom_id, equipe_ext_id):
+def calculer_probabilite(equipe_dom_id, equipe_ext_id, conn=None):
     """
     Calcule une probabilité simplifiée basée sur le classement et la forme.
     Renvoie une recommandation (1, X, ou 2) et un score de confiance.
     """
-    active_session = get_active_session()
+    active_session = get_active_session(conn=conn)
     session_id = active_session['id']
+    
+    if conn:
+        return _calculer_probabilite_internal(conn, session_id, equipe_dom_id, equipe_ext_id)
+        
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            
-            cursor.execute("SELECT points, forme FROM classement WHERE session_id = ? AND equipe_id = ? ORDER BY journee DESC LIMIT 1", (session_id, equipe_dom_id,))
-            stats_dom = cursor.fetchone()
-            
-            cursor.execute("SELECT points, forme FROM classement WHERE session_id = ? AND equipe_id = ? ORDER BY journee DESC LIMIT 1", (session_id, equipe_ext_id,))
-            stats_ext = cursor.fetchone()
+            return _calculer_probabilite_internal(conn, session_id, equipe_dom_id, equipe_ext_id)
     except Exception as e:
         logger.error(f"Erreur lors du calcul de probabilité : {e}", exc_info=True)
         return None, 0
+
+def _calculer_probabilite_internal(conn, session_id, equipe_dom_id, equipe_ext_id):
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT points, forme FROM classement WHERE session_id = ? AND equipe_id = ? ORDER BY journee DESC LIMIT 1", (session_id, equipe_dom_id,))
+    stats_dom = cursor.fetchone()
+    
+    cursor.execute("SELECT points, forme FROM classement WHERE session_id = ? AND equipe_id = ? ORDER BY journee DESC LIMIT 1", (session_id, equipe_ext_id,))
+    stats_ext = cursor.fetchone()
     
     if not stats_dom or not stats_ext:
         return None, 0
@@ -71,132 +79,138 @@ def calculer_probabilite(equipe_dom_id, equipe_ext_id):
         return "X", abs(score_total)
 
 
-# ============================================
-# PHASE 3 : RÉFÉRENTIEL PRISMA
-# ============================================
-
-def calculer_probabilite_amelioree(equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2):
+def calculer_probabilite_amelioree(equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2, conn=None):
     """
     Interface PRISMA pour le calcul amélioré.
     Prépare les données à partir de la DB et délègue au moteur PRISMA.
     """
-    active_session = get_active_session()
+    active_session = get_active_session(conn=conn)
     session_id = active_session['id']
+    
+    if conn:
+        return _calculer_probabilite_amelioree_internal(conn, session_id, equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2)
+        
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            
-            # Recup Stats
-            cursor.execute("SELECT points, forme FROM classement WHERE session_id = ? AND equipe_id = ? ORDER BY journee DESC LIMIT 1", (session_id, equipe_dom_id,))
-            stats_dom = cursor.fetchone()
-            
-            cursor.execute("SELECT points, forme FROM classement WHERE session_id = ? AND equipe_id = ? ORDER BY journee DESC LIMIT 1", (session_id, equipe_ext_id,))
-            stats_ext = cursor.fetchone()
-            
-            if not stats_dom or not stats_ext:
-                return None, 0
-            
-            pts_dom, forme_dom = stats_dom
-            pts_ext, forme_ext = stats_ext
-            
-            # Recup Buts
-            buts_dom = analyser_buts_recents_internal(cursor, equipe_dom_id)
-            buts_ext = analyser_buts_recents_internal(cursor, equipe_ext_id)
-            
-            # Recup H2H
-            bonus_h2h = analyser_confrontations_directes(equipe_dom_id, equipe_ext_id)
-            
-            # Préparation du pack de données pour PRISMA
-            prisma_data = {
-                'pts_dom': pts_dom, 'pts_ext': pts_ext,
-                'forme_dom': forme_dom, 'forme_ext': forme_ext,
-                'cote_1': cote_1, 'cote_x': cote_x, 'cote_2': cote_2,
-                'bonus_h2h': bonus_h2h
-            }
-            
-            if buts_dom and buts_ext:
-                prisma_data.update({
-                    'bp_dom': buts_dom[0], 'bc_dom': buts_dom[1],
-                    'bp_ext': buts_ext[0], 'bc_ext': buts_ext[1]
-                })
-
-            # Délégation au moteur PRISMA
-            prediction, score = prisma_engine.calculer_score_prisma(prisma_data)
-            
-            if prediction is None:
-                # Log du motif de rejet PRISMA si nécessaire
-                # logger.info(f"[PRISMA] Match rejeté : {score}")
-                return None, 0
-            
-            return prediction, score
+            return _calculer_probabilite_amelioree_internal(conn, session_id, equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2)
             
     except Exception as e:
         logger.error(f"Erreur lors du calcul PRISMA : {e}", exc_info=True)
         return None, 0
 
+def _calculer_probabilite_amelioree_internal(conn, session_id, equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2):
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT points, forme FROM classement WHERE session_id = ? AND equipe_id = ? ORDER BY journee DESC LIMIT 1", (session_id, equipe_dom_id,))
+    stats_dom = cursor.fetchone()
+    
+    cursor.execute("SELECT points, forme FROM classement WHERE session_id = ? AND equipe_id = ? ORDER BY journee DESC LIMIT 1", (session_id, equipe_ext_id,))
+    stats_ext = cursor.fetchone()
+    
+    if not stats_dom or not stats_ext:
+        return None, 0
+    
+    pts_dom, forme_dom = stats_dom
+    pts_ext, forme_ext = stats_ext
+    
+    buts_dom = analyser_buts_recents_internal(cursor, session_id, equipe_id=equipe_dom_id)
+    buts_ext = analyser_buts_recents_internal(cursor, session_id, equipe_id=equipe_ext_id)
+    
+    bonus_h2h = analyser_confrontations_directes(equipe_dom_id, equipe_ext_id, conn=conn)
+    
+    prisma_data = {
+        'pts_dom': pts_dom, 'pts_ext': pts_ext,
+        'forme_dom': forme_dom, 'forme_ext': forme_ext,
+        'cote_1': cote_1, 'cote_x': cote_x, 'cote_2': cote_2,
+        'bonus_h2h': bonus_h2h
+    }
+    
+    if buts_dom and buts_ext:
+        prisma_data.update({
+            'bp_dom': buts_dom[0], 'bc_dom': buts_dom[1],
+            'bp_ext': buts_ext[0], 'bc_ext': buts_ext[1]
+        })
 
-def analyser_performances_recentes():
+    prediction, score = prisma_engine.calculer_score_prisma(prisma_data)
+    
+    if prediction is None:
+        return None, 0
+    
+    return prediction, score
+
+
+def analyser_performances_recentes(conn=None):
     """Analyse les performances récentes (DB)."""
-    active_session = get_active_session()
+    active_session = get_active_session(conn=conn)
     session_id = active_session['id']
+    
+    if conn:
+        return _analyser_performances_recentes_internal(conn, session_id)
+        
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT succes FROM predictions WHERE session_id = ? AND succes IS NOT NULL ORDER BY id DESC LIMIT 15", (session_id,))
-            resultats = cursor.fetchall()
-            if not resultats: return 1.0, "Neutre"
-            succes_count = sum(1 for r in resultats if r[0] == 1)
-            return succes_count / len(resultats), f"{succes_count}/{len(resultats)}"
+            return _analyser_performances_recentes_internal(conn, session_id)
     except Exception as e:
         logger.error(f"Erreur DB performances : {e}")
         return 1.0, "Erreur"
 
-def selectionner_meilleurs_matchs(journee):
+def _analyser_performances_recentes_internal(conn, session_id):
+    cursor = conn.cursor()
+    cursor.execute("SELECT succes FROM predictions WHERE session_id = ? AND succes IS NOT NULL ORDER BY id DESC LIMIT 15", (session_id,))
+    resultats = cursor.fetchall()
+    if not resultats: return 1.0, "Neutre"
+    succes_count = sum(1 for r in resultats if r[0] == 1)
+    return succes_count / len(resultats), f"{succes_count}/{len(resultats)}"
+
+def selectionner_meilleurs_matchs(journee, conn=None):
     """
     Sélection standard basée sur le calcul de probabilité simple.
     """
     _reload_config()
-    active_session = get_active_session()
+    active_session = get_active_session(conn=conn)
     session_id = active_session['id']
     
+    if conn:
+        return _selectionner_meilleurs_matchs_internal(conn, session_id, journee)
+        
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            
-            # Récupération des matchs
-            cursor.execute("SELECT id, equipe_dom_id, equipe_ext_id FROM matches WHERE session_id = ? AND journee = ?", (session_id, journee))
-            matchs = cursor.fetchall()
-            
-            predictions = []
-            for m in matchs:
-                match_id, dom_id, ext_id = m
-                pred, conf = calculer_probabilite(dom_id, ext_id)
-                
-                if pred:
-                    predictions.append({
-                        'match_id': match_id,
-                        'prediction': pred,
-                        'fiabilite': conf
-                    })
-            
-            # Sauvegarde
-            for p in predictions:
-                cursor.execute("INSERT INTO predictions (session_id, match_id, prediction, fiabilite) VALUES (?, ?, ?, ?)",
-                             (session_id, p['match_id'], p['prediction'], p['fiabilite']))
-            
-            return predictions
+            return _selectionner_meilleurs_matchs_internal(conn, session_id, journee)
     except Exception as e:
         logger.error(f"Erreur sélection standard : {e}")
         return []
 
-def selectionner_meilleurs_matchs_ameliore(journee):
+def _selectionner_meilleurs_matchs_internal(conn, session_id, journee):
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT id, equipe_dom_id, equipe_ext_id FROM matches WHERE session_id = ? AND journee = ?", (session_id, journee))
+    matchs = cursor.fetchall()
+    
+    predictions = []
+    for m in matchs:
+        match_id, dom_id, ext_id = m
+        pred, conf = calculer_probabilite(dom_id, ext_id, conn=conn)
+        
+        if pred:
+            predictions.append({
+                'match_id': match_id,
+                'prediction': pred,
+                'fiabilite': conf
+            })
+    
+    for p in predictions:
+        cursor.execute("INSERT INTO predictions (session_id, match_id, prediction, fiabilite) VALUES (?, ?, ?, ?)",
+                     (session_id, p['match_id'], p['prediction'], p['fiabilite']))
+    
+    return predictions
+
+def selectionner_meilleurs_matchs_ameliore(journee, conn=None):
     """
     Sélection intelligente déléguée à PRISMA avec orchestration DB.
     Respecte le mode 'Sommeil Profond' pendant l'entraînement de ZEUS.
     """
     _reload_config()
     
-    # 0. Vérif Sommeil Profond (ZEUS Training)
     if getattr(config, 'ZEUS_DEEP_SLEEP', False):
         print(f"💤 [IA] Sommeil Profond actif (Entraînement ZEUS). Aucune prédiction.")
         return []
@@ -205,56 +219,59 @@ def selectionner_meilleurs_matchs_ameliore(journee):
         print(f"Info : Journée {journee} < 4. Pas assez de données.")
         return []
     
-    active_session = get_active_session()
+    active_session = get_active_session(conn=conn)
     session_id = active_session['id']
     
+    if conn:
+        return _selectionner_meilleurs_matchs_ameliore_internal(conn, session_id, journee)
+
     try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            
-            # 2. IA Adaptative (PRISMA)
-            taux_succes, ratio_str = analyser_performances_recentes()
-            seuil_confiance, mode_descr = prisma_selection.determiner_seuil_dynamique(taux_succes)
-            print(f"   [PRISMA] Mode {mode_descr} | Seuil: {seuil_confiance}")
-            
-            # 3. Récupération & Analyse des matchs pour la session active
-            cursor.execute("SELECT id, equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2 FROM matches WHERE session_id = ? AND journee = ?", (session_id, journee))
-            matchs = cursor.fetchall()
-            
-            cursor.execute("SELECT id, nom FROM equipes")
-            equipes_noms = {r[0]: r[1] for r in cursor.fetchall()}
-            
-            raw_predictions = []
-            for m in matchs:
-                match_id, dom_id, ext_id, c1, cx, c2 = m
-                pred, conf = calculer_probabilite_amelioree(dom_id, ext_id, c1, cx, c2)
-                
-                if pred and conf >= seuil_confiance:
-                    raw_predictions.append({
-                        'match_id': match_id, 'equipe_dom_id': dom_id, 'equipe_ext_id': ext_id,
-                        'equipe_dom': equipes_noms.get(dom_id), 'equipe_ext': equipes_noms.get(ext_id),
-                        'prediction': pred, 'confiance': conf, 'fiabilite': conf
-                    })
-            
-            # 4. Sélection déléguée
-            final_selection = prisma_selection.filtrer_meilleurs_matchs(raw_predictions, config.MAX_PREDICTIONS_PAR_JOURNEE)
-            
-            # 5. DB Save avec session_id
-            for p in final_selection:
-                cursor.execute("INSERT INTO predictions (session_id, match_id, prediction, fiabilite) VALUES (?, ?, ?, ?)",
-                             (session_id, p['match_id'], p['prediction'], p['fiabilite']))
-            
-            return final_selection
+        with get_db_connection(write=True) as conn:
+            return _selectionner_meilleurs_matchs_ameliore_internal(conn, session_id, journee)
             
     except Exception as e:
         logger.error(f"Erreur sélection PRISMA : {e}", exc_info=True)
         return []
 
+def _selectionner_meilleurs_matchs_ameliore_internal(conn, session_id, journee):
+    cursor = conn.cursor()
+    
+    taux_succes, ratio_str = analyser_performances_recentes(conn=conn)
+    seuil_confiance, mode_descr = prisma_selection.determiner_seuil_dynamique(taux_succes)
+    print(f"   [PRISMA] Mode {mode_descr} | Seuil: {seuil_confiance}")
+    
+    cursor.execute("SELECT id, equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2 FROM matches WHERE session_id = ? AND journee = ?", (session_id, journee))
+    matchs = cursor.fetchall()
+    
+    cursor.execute("SELECT id, nom FROM equipes")
+    equipes_noms = {r[0]: r[1] for r in cursor.fetchall()}
+    
+    raw_predictions = []
+    for m in matchs:
+        match_id, dom_id, ext_id, c1, cx, c2 = m
+        pred, conf = calculer_probabilite_amelioree(dom_id, ext_id, c1, cx, c2, conn=conn)
+        
+        if pred and conf >= seuil_confiance:
+            raw_predictions.append({
+                'match_id': match_id, 'equipe_dom_id': dom_id, 'equipe_ext_id': ext_id,
+                'equipe_dom': equipes_noms.get(dom_id), 'equipe_ext': equipes_noms.get(ext_id),
+                'prediction': pred, 'confiance': conf, 'fiabilite': conf
+            })
+    
+    final_selection = prisma_selection.filtrer_meilleurs_matchs(raw_predictions, config.MAX_PREDICTIONS_PAR_JOURNEE)
+    
+    for p in final_selection:
+        cursor.execute("INSERT INTO predictions (session_id, match_id, prediction, fiabilite) VALUES (?, ?, ?, ?)",
+                     (session_id, p['match_id'], p['prediction'], p['fiabilite']))
+        p['id'] = cursor.lastrowid
+    
+    multiple_bets.generer_pari_multiple(journee, final_selection, conn=conn)
+    
+    return final_selection
 
-def analyser_buts_recents_internal(cursor, equipe_id):
+
+def analyser_buts_recents_internal(cursor, session_id, equipe_id):
     """Analyse les buts (Helper DB)."""
-    active_session = get_active_session()
-    session_id = active_session['id']
     try:
         cursor.execute("""
             SELECT 
@@ -270,29 +287,36 @@ def analyser_buts_recents_internal(cursor, equipe_id):
     except: return None
 
 
-def analyser_confrontations_directes(equipe_dom_id, equipe_ext_id):
+def analyser_confrontations_directes(equipe_dom_id, equipe_ext_id, conn=None):
     """Analyse H2H (Helper DB)."""
-    active_session = get_active_session()
+    active_session = get_active_session(conn=conn)
     session_id = active_session['id']
+    
+    if conn:
+        return _analyser_confrontations_directes_internal(conn, session_id, equipe_dom_id, equipe_ext_id)
+        
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT score_dom, score_ext FROM matches 
-                WHERE session_id = ? AND equipe_dom_id = ? AND equipe_ext_id = ? AND score_dom IS NOT NULL
-                ORDER BY journee DESC LIMIT 5
-            """, (session_id, equipe_dom_id, equipe_ext_id))
-            hist = cursor.fetchall()
-            if not hist or len(hist) < 3: return 0
-            v_dom = sum(1 for h in hist if h[0] > h[1])
-            nuls = sum(1 for h in hist if h[0] == h[1])
-            t_vic = v_dom / len(hist)
-            if t_vic >= 0.80: return 3.0
-            if t_vic >= 0.60: return 1.5
-            if (nuls / len(hist)) >= 0.60: return -2.0
-            if t_vic <= 0.20: return -3.0
-            return 0
+            return _analyser_confrontations_directes_internal(conn, session_id, equipe_dom_id, equipe_ext_id)
     except: return 0
+
+def _analyser_confrontations_directes_internal(conn, session_id, equipe_dom_id, equipe_ext_id):
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT score_dom, score_ext FROM matches 
+        WHERE session_id = ? AND equipe_dom_id = ? AND equipe_ext_id = ? AND score_dom IS NOT NULL
+        ORDER BY journee DESC LIMIT 5
+    """, (session_id, equipe_dom_id, equipe_ext_id))
+    hist = cursor.fetchall()
+    if not hist or len(hist) < 3: return 0
+    v_dom = sum(1 for h in hist if h[0] > h[1])
+    nuls = sum(1 for h in hist if h[0] == h[1])
+    t_vic = v_dom / len(hist)
+    if t_vic >= 0.80: return 3.0
+    if t_vic >= 0.60: return 1.5
+    if (nuls / len(hist)) >= 0.60: return -2.0
+    if t_vic <= 0.20: return -3.0
+    return 0
 
 
 def obtenir_predictions_zeus_journee(journee: int) -> List[Dict]:
@@ -302,11 +326,9 @@ def obtenir_predictions_zeus_journee(journee: int) -> List[Dict]:
     """
     _reload_config()
     
-    # 0. Vérif Sommeil Profond
     if getattr(config, 'ZEUS_DEEP_SLEEP', False):
         return []
 
-    # 1. Charger le modèle
     model = get_zeus_model()
     if not model:
         logger.warning("Modèle ZEUS non trouvé pour l'inférence.")
@@ -318,88 +340,107 @@ def obtenir_predictions_zeus_journee(journee: int) -> List[Dict]:
     predictions = []
     try:
         with get_db_connection() as conn:
-            # 2. Récupérer les matchs de la journée pour la session active
             matches = get_matches_for_journee(journee, conn)
             
-            # 3. Récupérer capital actuel pour la session active
             cursor = conn.cursor()
             cursor.execute("SELECT bankroll_apres FROM historique_paris WHERE session_id = ? ORDER BY id_pari DESC LIMIT 1", (session_id,))
             row = cursor.fetchone()
             capital_actuel = row[0] if row else active_session['capital_initial']
             
-            for m in matches:
-                # ZEUS prédit même si cotes absentes (fallback géré dans construire_observation)
-                if not m['cote_1'] or not m['cote_x'] or not m['cote_2']:
-                    continue
+            model = get_zeus_model()
+            if model:
+                for m in matches:
+                    if not m['cote_1'] or not m['cote_x'] or not m['cote_2']:
+                        continue
+                        
+                    action_id, details = predire_pari_zeus(model, m, conn)
                     
-                action_id, details = predire_pari_zeus(model, m, conn)
-                
-                # Calcul de la mise en Ar
-                mise_ar = int(capital_actuel * details['pourcentage'])
-                if mise_ar < 1000 and details['type'] != 'Aucun':
-                    # Si mise trop faible mais ZEUS veut parier, on l'affiche quand même mais on note 0
-                    mise_ar = 0
-                
-                predictions.append({
-                    'match_id': m['id'],
-                    'equipe_dom': m['equipe_dom_nom'],
-                    'equipe_ext': m['equipe_ext_nom'],
-                    'action_id': action_id,
-                    'pari_type': details['type'],
-                    'mise_ar': mise_ar,
-                    'pourcentage': details['pourcentage'],
-                    'decision_formatee': formater_decision_zeus(details)
-                })
+                    mise_ar = details.get('montant_ar', 0)
+                    
+                    if mise_ar > 0 and details['type'] != 'Aucun':
+                        cursor.execute("""
+                            INSERT INTO predictions (session_id, match_id, prediction, fiabilite)
+                            VALUES (?, ?, ?, ?)
+                        """, (session_id, m['id'], details['type'], 0.8))
+                        prediction_id = cursor.lastrowid
+                        
+                        bankroll_apres = capital_actuel - mise_ar
+                        
+                        enregistrer_pari(
+                            session_id=session_id,
+                            prediction_id=prediction_id,
+                            journee=journee,
+                            type_pari=details['type'],
+                            mise_ar=mise_ar,
+                            pourcentage_bankroll=mise_ar / capital_actuel if capital_actuel > 0 else 0,
+                            cote_jouee=m.get(f'cote_{details["type"].lower()}', 0),
+                            resultat=None,
+                            profit_net=None,
+                            bankroll_apres=bankroll_apres,
+                            probabilite_implicite=1.0 / m.get(f'cote_{details["type"].lower()}', 1) if m.get(f'cote_{details["type"].lower()}') else None,
+                            action_id=action_id,
+                            conn=conn
+                        )
+                        
+                        capital_actuel = bankroll_apres
+                    
+                    predictions.append({
+                        'match_id': m['id'],
+                        'equipe_dom': m['equipe_dom_nom'],
+                        'equipe_ext': m['equipe_ext_nom'],
+                        'action_id': action_id,
+                        'pari_type': details['type'],
+                        'mise_ar': mise_ar,
+                        'decision_formatee': formater_decision_zeus(details)
+                    })
                 
     except Exception as e:
         logger.error(f"Erreur prédictions ZEUS J{journee} : {e}")
         
     return predictions
 
-
 def mettre_a_jour_scoring():
     """Valide les prédictions passées via IDs pour la session active."""
-    active_session = get_active_session()
-    session_id = active_session['id']
     try:
-        with get_db_connection() as conn:
+        with get_db_connection(write=True) as conn:
+            active_session = get_active_session(conn=conn)
+            session_id = active_session['id']
             cursor = conn.cursor()
             
-            cursor.execute("SELECT id, match_id, prediction FROM predictions WHERE session_id = ? AND succes IS NULL", (session_id,))
+            cursor.execute('''
+                SELECT p.id, p.prediction, m.score_dom, m.score_ext 
+                FROM predictions p
+                JOIN matches m ON p.match_id = m.id
+                WHERE p.session_id = ? AND p.succes IS NULL
+            ''', (session_id,))
             en_attente = cursor.fetchall()
             
             for p in en_attente:
-                pid, match_id, pred = p
+                pid, pred, sd, se = p
+                
+                if sd is None or se is None:
+                    continue
+                    
+                resultat_reel = "1" if sd > se else ("2" if se > sd else "X")
+                succes = 1 if resultat_reel == pred else 0
                 
                 cursor.execute('''
-                    SELECT score_dom, score_ext FROM matches 
+                    UPDATE predictions 
+                    SET resultat = ?, succes = ?
                     WHERE id = ?
-                ''', (match_id,))
-                res = cursor.fetchone()
-                
-                if res:
-                    sd, se = res
-                    # Vérifier que les scores ne sont pas None
-                    if sd is None or se is None:
-                        continue
-                        
-                    resultat_reel = "1" if sd > se else ("2" if se > sd else "X")
-                    succes = 1 if resultat_reel == pred else 0
-                    
-                    # Mise à jour de la prédiction
-                    cursor.execute('''
-                        UPDATE predictions 
-                        SET resultat = ?, succes = ?
-                        WHERE id = ?
-                    ''', (resultat_reel, succes, pid))
+                ''', (resultat_reel, succes, pid))
 
-                    # Mise à jour du score PRISMA de la session
-                    pts = config.PRISMA_POINTS_VICTOIRE if succes == 1 else config.PRISMA_POINTS_DEFAITE
-                    cursor.execute('''
+                pts = config.PRISMA_POINTS_VICTOIRE if succes == 1 else config.PRISMA_POINTS_DEFAITE
+                cursor.execute('''
                         UPDATE sessions 
                         SET score_prisma = score_prisma + ?
                         WHERE id = ?
                     ''', (pts, session_id))
+            
+            multiple_bets.valider_paris_multiples(conn=conn)
+            
+            valider_paris_zeus(conn)
+            
     except Exception as e:
         logger.error(f"Erreur lors de la mise à jour du scoring : {e}", exc_info=True)
         print(f"❌ Erreur lors de la mise à jour du scoring : {e}")

@@ -4,7 +4,6 @@ Configuration et création de l'agent PPO pour ZEUS.
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
-from stable_baselines3.common.vec_env import DummyVecEnv
 from typing import Optional
 import os
 
@@ -45,10 +44,9 @@ def create_ppo_agent(
     Returns:
         Modèle PPO configuré
     """
-    # Configuration du réseau de neurones
     policy_kwargs = {
         "net_arch": [
-            dict(pi=[128, 128], vf=[128, 128])  # 2 couches de 128 neurones
+            dict(pi=[128, 128], vf=[128, 128])
         ]
     }
     
@@ -112,19 +110,16 @@ def create_callbacks(
     Returns:
         Liste de callbacks
     """
-    # Créer les dossiers si nécessaire
     os.makedirs(checkpoint_dir, exist_ok=True)
     os.makedirs(best_model_dir, exist_ok=True)
     os.makedirs(log_dir, exist_ok=True)
     
-    # Callback de checkpoint
     checkpoint_callback = CheckpointCallback(
         save_freq=checkpoint_freq,
         save_path=checkpoint_dir,
         name_prefix="zeus_checkpoint"
     )
     
-    # Callback d'évaluation
     eval_callback = EvalCallback(
         eval_env,
         best_model_save_path=best_model_dir,

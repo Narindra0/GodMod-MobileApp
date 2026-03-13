@@ -1,6 +1,5 @@
 """
 Module d'inférence pour ZEUS en production.
-Gère la conversion des données de match en actions concrètes.
 """
 
 import os
@@ -13,7 +12,6 @@ from ..environment.observation import construire_observation
 from ..environment.betting_env import ACTION_SPACE_CONFIG
 from ...core import config
 
-# Singleton pour le modèle
 _ZEUS_MODEL = None
 
 def get_zeus_model(model_path: str = None) -> Optional[PPO]:
@@ -32,8 +30,8 @@ def get_zeus_model(model_path: str = None) -> Optional[PPO]:
     return _ZEUS_MODEL
 
 def obtenir_action_details(action_id: int) -> Dict:
-    """Traduit un Action ID en détails lisibles (type, pourcentage)."""
-    return ACTION_SPACE_CONFIG.get(action_id, {'type': 'Aucun', 'pourcentage': 0.0})
+    """Traduit un Action ID en détails lisibles (type, montant_ar)."""
+    return ACTION_SPACE_CONFIG.get(action_id, {'type': 'Aucun', 'montant_ar': 0})
 
 def predire_pari_zeus(
     model: PPO,
@@ -46,7 +44,6 @@ def predire_pari_zeus(
     Returns:
         Tuple (action_id, action_details)
     """
-    # 1. Construire l'observation
     obs = construire_observation(
         match_data['equipe_dom_id'],
         match_data['equipe_ext_id'],
@@ -57,11 +54,9 @@ def predire_pari_zeus(
         conn
     )
     
-    # 2. Inférence (Action déterministe en production)
     action, _ = model.predict(obs, deterministic=True)
     action_id = int(action)
     
-    # 3. Détails
     details = obtenir_action_details(action_id)
     
     return action_id, details
@@ -69,12 +64,12 @@ def predire_pari_zeus(
 def formater_decision_zeus(action_details: Dict) -> str:
     """Formate l'action pour l'affichage console."""
     pari_type = action_details['type']
-    pourcentage = action_details['pourcentage']
+    montant_ar = action_details.get('montant_ar', 0)
     
     if pari_type == 'Aucun':
         return "[yellow]Abstention[/]"
     
-    label = "Prudent" if pourcentage < 0.08 else "Conviction"
+    label = "Prudent" if montant_ar < 2000 else "Conviction"
     color = "cyan" if label == "Prudent" else "bold cyan"
     
     return f"[{color}]{pari_type} ({label})[/]"

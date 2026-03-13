@@ -28,13 +28,14 @@ def calculer_recompense(
     """
     # Cas 1: Abstention
     if resultat is None or mise == 0:
-        # Petite pénalité pour encourager l'action (optionnel)
-        return -0.1, score_zeus
+        # Neutre pour l'abstention
+        return 0.0, score_zeus
     
     # Cas 2: Victoire
     if resultat:
         profit = mise * (cote - 1)
-        reward = profit
+        # Normalisation par 1000 + bonus de victoire
+        reward = (profit / 1000.0) + 0.1
         nouveau_score = score_zeus + 1
         return reward, nouveau_score
     
@@ -42,12 +43,13 @@ def calculer_recompense(
     else:
         perte = mise
         # Pénalité asymétrique: les pertes coûtent 1.5x plus cher
-        reward = -perte * 1.5
+        # Normalisation par 1000
+        reward = -(perte * 1.5) / 1000.0
         nouveau_score = score_zeus - 1
         
-        # Pénalité terminale si banqueroute
+        # Pénalité terminale si banqueroute (normalisée)
         if capital_actuel < 1000:
-            reward -= 10000
+            reward -= 10.0
         
         return reward, nouveau_score
 

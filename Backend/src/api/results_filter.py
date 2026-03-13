@@ -11,8 +11,6 @@ from typing import List, Dict
 import requests
 from .api_client import URL_RESULTS, HEADERS
 
-# ==================== FONCTION DE FILTRAGE ====================
-
 def extract_results_minimal(data: Dict) -> List[Dict]:
     """
     Extrait uniquement les informations essentielles des résultats
@@ -42,7 +40,6 @@ def extract_results_minimal(data: Dict) -> List[Dict]:
     rounds = data.get("rounds", [])
     
     for round_item in rounds:
-        # Filtrage J38 : Exception métier, on ignore les résultats de la journée 38
         if round_item.get("roundNumber") == 38:
             continue
             
@@ -87,45 +84,4 @@ def get_filtered_results(skip: int = 0, take: int = 5) -> List[Dict]:
         return extract_results_minimal(raw_data)
     
     except requests.exceptions.RequestException as e:
-        print(f"[ERREUR] Impossible de recuperer les resultats : {e}")
         return []
-
-
-# ==================== TEST ====================
-
-if __name__ == "__main__":
-    print("[TEST] Module Results Filter")
-    print("=" * 60)
-    
-    # Test avec l'API directement
-    print("\n[TEST 1] Recuperation et filtrage des resultats...")
-    clean_data = get_filtered_results(skip=0, take=4)
-    
-    if clean_data:
-        print(f"[OK] {len(clean_data)} journees filtrees")
-        
-        # Afficher un exemple
-        if clean_data[0]["matches"]:
-            example = clean_data[0]["matches"][0]
-            print(f"[EXEMPLE] {example['homeTeam']} vs {example['awayTeam']} : {example['score']}")
-        
-        # Sauvegarder pour vérification
-        with open("test_results_filtered.json", 'w', encoding='utf-8') as f:
-            json.dump(clean_data, f, indent=2, ensure_ascii=False)
-        print("[SAVED] Fichier test_results_filtered.json cree")
-        
-        # Statistiques de compression
-        raw_response = requests.get(URL_RESULTS, headers=HEADERS, params={"skip": 0, "take": 4}, timeout=10)
-        raw_size = len(raw_response.text)
-        filtered_size = len(json.dumps(clean_data))
-        reduction = ((raw_size - filtered_size) / raw_size) * 100
-        
-        print(f"\n[STATS] Compression des donnees:")
-        print(f"  Taille brute: {raw_size:,} bytes")
-        print(f"  Taille filtree: {filtered_size:,} bytes")
-        print(f"  Reduction: {reduction:.1f}%")
-    else:
-        print("[ERREUR] Echec de la recuperation")
-    
-    print("\n" + "=" * 60)
-    print("[SUCCESS] Test termine")

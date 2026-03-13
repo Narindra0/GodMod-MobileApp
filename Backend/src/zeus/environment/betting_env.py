@@ -19,6 +19,7 @@ from ..database.queries import (
 from .observation import construire_observation
 from .reward import calculer_recompense, determiner_resultat
 from ..utils.risk_manager import RiskManager
+from ...core.database import get_db_connection
 
 
 # Configuration des actions (MISES FIXES EN Ar)
@@ -67,7 +68,8 @@ class BettingEnv(gym.Env):
         journee_debut: int = 1,
         journee_fin: int = 38,
         mode: str = 'train',
-        version_ia: str = 'v1.0'
+        version_ia: str = 'v1.0',
+        feature_session_id: Optional[int] = None
     ):
         """
         Args:
@@ -112,6 +114,7 @@ class BettingEnv(gym.Env):
         self.historique_capital = []
         self.total_paris = 0
         self.paris_gagnants = 0
+        self.feature_session_id = feature_session_id
         
     def reset(
         self,
@@ -135,10 +138,16 @@ class BettingEnv(gym.Env):
         self.total_paris = 0
         self.paris_gagnants = 0
         
-        # Connexion DB
+        # Connexion DB via context manager pour le début de l'épisode
+        # Note: In RL training, we often want to batch writes. 
+        # Here we manage a single connection for the duration of the episode.
         if self.conn is None:
-            self.conn = sqlite3.connect(self.db_path)
+            # We don't use 'with' here because we want to keep it open across steps
+            # But we MUST ensure we use the same parameters as get_db_connection
+            self.conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
             self.conn.row_factory = sqlite3.Row
+            self.conn.execute("PRAGMA journal_mode = WAL")
+            self.conn.execute("PRAGMA busy_timeout = 30000")
         
         # Créer session de tracking
         type_session = 'TRAINING' if self.mode == 'train' else 'EVALUATION'
@@ -200,7 +209,8 @@ class BettingEnv(gym.Env):
             self.match_actuel['cote_1'],
             self.match_actuel['cote_x'],
             self.match_actuel['cote_2'],
-            self.conn
+            self.conn,
+            self.feature_session_id
         )
     
     def _get_info(self) -> Dict:
@@ -310,6 +320,9 @@ class BettingEnv(gym.Env):
             conn=self.conn
         )
         
+        # NOTE: We no longer conn.commit() every step inside enregistrer_pari.
+        # We commit at the end of the episode or in reset to improve performance and reduce locks.
+        
         self.historique_capital.append(self.capital)
         
         # Vérifier conditions de terminaison
@@ -336,6 +349,8 @@ class BettingEnv(gym.Env):
                 self.score_zeus,
                 self.conn
             )
+            # Commit atomic de toute la saison
+            self.conn.commit()
         
         # Nouvelle observation
         next_observation = self._get_observation()

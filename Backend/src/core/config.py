@@ -56,3 +56,12 @@ USE_SELECTION_AMELIOREE = True
 # État de ZEUS pendant l'entraînement automatique
 # Si True, ZEUS n'émet pas de prédictions pour éviter les conflits
 ZEUS_DEEP_SLEEP = False
+
+# ============================================
+# CONFIGURATION DES PARIS MULTIPLES (COMBINES)
+# ============================================
+ACTIVATE_MULTIPLE_BETS = True
+MAX_COMBINED_MATCHES = 3
+PERCENTAGE_BANKROLL_MULTIPLE = 0.05 # 5% pour le pari combiné
+MONTANT_FIXE_MULTIPLE = 1000  # Montant fixe en Ar pour les paris multiples
+USE_MONTANT_FIXE = True  # Utiliser montant fixe au lieu du pourcentage

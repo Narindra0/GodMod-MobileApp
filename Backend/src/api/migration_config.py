@@ -6,61 +6,38 @@ Version: 2.1 - Phases 5 & 6
 Date: Janvier 2025
 """
 
-# ==================== CONFIGURATION DE MIGRATION ====================
-
-# Active/Desactive l'utilisation de l'API pour chaque composant
-# True = Utilise API, False = Utilise Scraper HTML
 API_MIGRATION = {
-    # Phase 5.1 - Classement
-    "USE_API_RANKING": True,      # Basculer en premier (donnees les plus stables)
-    
-    # Phase 5.2 - Resultats
-    "USE_API_RESULTS": True,      # Basculer ensuite
-    
-    # Phase 5.3 - Matchs a venir
-    "USE_API_MATCHES": True,      # Basculer en dernier (cotes critiques)
-    
-    # Mode global
-    "API_ONLY_MODE": True,        # True = API uniquement, False = Systeme hybride
+    "USE_API_RANKING": True,
+    "USE_API_RESULTS": True,
+    "USE_API_MATCHES": True,
+    "API_ONLY_MODE": True,
 }
 
-# ==================== CONFIGURATION DE SECURITE ====================
-
-# Monitoring et alertes
 MONITORING = {
-    "LOG_API_ERRORS": True,           # Logger toutes les erreurs API
-    "ALERT_ON_403": True,             # Alerte si App-Version obsolete
-    "FALLBACK_TO_SCRAPER": False,     # Rollback auto vers scraper si API fail
-    "MAX_API_RETRIES": 3,             # Nombre de tentatives avant echec
+    "LOG_API_ERRORS": True,
+    "ALERT_ON_403": True,
+    "FALLBACK_TO_SCRAPER": False,
+    "MAX_API_RETRIES": 3,
 }
 
-# ==================== OPTIMISATIONS (Phase 6) ====================
-
-# Cache pour reduire les appels API
 CACHE_CONFIG = {
-    "ENABLED": False,                 # Activer le cache (optionnel)
-    "RANKING_CACHE_SECONDS": 3600,   # Cache classement 1h
-    "RESULTS_CACHE_SECONDS": 1800,   # Cache resultats 30min
-    "MATCHES_CACHE_SECONDS": 300,    # Cache matchs 5min
+    "ENABLED": False,
+    "RANKING_CACHE_SECONDS": 3600,
+    "RESULTS_CACHE_SECONDS": 1800,
+    "MATCHES_CACHE_SECONDS": 300,
 }
 
-# Performance
 PERFORMANCE = {
-    "BATCH_INSERT": True,             # Insertion par lot en BDD
-    "USE_CONNECTION_POOL": False,     # Pool de connexions (optionnel)
-    "ASYNC_API_CALLS": False,         # Appels API asynchrones (optionnel)
+    "BATCH_INSERT": True,
+    "USE_CONNECTION_POOL": False,
+    "ASYNC_API_CALLS": False,
 }
 
-# ==================== LEGACY SCRAPER (Phase 6) ====================
-
-# Configuration du scraper HTML (desactive mais conserve)
 LEGACY_SCRAPER = {
-    "ENABLED": False,                 # Desactive par defaut
-    "KEEP_CODE": True,                # Conserver le code (ne pas supprimer)
-    "LOG_ACTIVITY": False,            # Logger l'activite du scraper
+    "ENABLED": False,
+    "KEEP_CODE": True,
+    "LOG_ACTIVITY": False,
 }
-
-# ==================== HELPERS ====================
 
 def is_api_enabled(component: str) -> bool:
     """
@@ -114,8 +91,6 @@ def get_migration_status() -> dict:
     }
 
 
-# ==================== PLAN DE MIGRATION ====================
-
 MIGRATION_PLAN = """
 PLAN DE MIGRATION API v2.1
 ==========================
@@ -152,20 +127,3 @@ ROLLBACK (si probleme)
 ----------------------
 Remettre les flags a False et redemarrer
 """
-
-# ==================== TEST ====================
-
-if __name__ == "__main__":
-    print("[CONFIG] Migration API v2.1")
-    print("=" * 60)
-    
-    status = get_migration_status()
-    print("\n[STATUT ACTUEL]")
-    print(f"  Classement: {status['ranking'].upper()}")
-    print(f"  Resultats: {status['results'].upper()}")
-    print(f"  Matchs: {status['matches'].upper()}")
-    print(f"  Mode API pur: {status['api_only_mode']}")
-    print(f"  Legacy scraper: {'ACTIF' if status['legacy_enabled'] else 'DESACTIVE'}")
-    
-    print("\n" + "=" * 60)
-    print(MIGRATION_PLAN)

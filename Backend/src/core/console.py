@@ -7,13 +7,12 @@ from rich.text import Text
 from rich import box
 from datetime import datetime
 
-# Definition du theme GODMOD
 custom_theme = Theme({
     "info": "cyan",
     "warning": "yellow",
     "error": "bold red",
     "success": "bold green",
-    "title": "bold gold3", # Gold
+    "title": "bold gold3",
     "subtitle": "italic cyan",
     "highlight": "bold white",
     "timestamp": "dim white"

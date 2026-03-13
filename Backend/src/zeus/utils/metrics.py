@@ -114,7 +114,6 @@ def generer_rapport_performance(
     Returns:
         Dictionnaire avec toutes les métriques
     """
-    # Calculer les rendements
     returns = []
     for i in range(1, len(capital_history)):
         if capital_history[i-1] > 0:

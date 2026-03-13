@@ -1,6 +1,5 @@
 """
 Module de comparaison des performances pour la promotion des modèles ZEUS.
-Un modèle n'est promu que s'il est plus robuste et performant que l'ancien.
 """
 
 import os
@@ -59,16 +58,12 @@ def doit_promouvoir(new_metrics: Dict, old_metrics: Dict) -> bool:
     2. Le ROI moyen doit être supérieur ET plus stable (std_roi plus faible).
     3. Le Max Drawdown doit être moins sévère.
     """
-    # 1. Survie critique
     if new_metrics['survival_rate'] < old_metrics['survival_rate']:
         return False
         
-    # 2. Performance et Stabilité
-    # On autorise un ROI légèrement plus faible si la stabilité est bien meilleure
     if new_metrics['avg_roi'] > old_metrics['avg_roi'] and new_metrics['std_roi'] <= old_metrics['std_roi']:
         return True
         
-    # Si le taux de survie est passé à 100%, c'est un argument fort
     if new_metrics['survival_rate'] == 1.0 and old_metrics['survival_rate'] < 1.0:
         return True
         
@@ -82,7 +77,6 @@ def deployer_modele(model_source_path: str, model_dest_dir: str = "./models/zeus
     os.makedirs(model_dest_dir, exist_ok=True)
     dest_path = os.path.join(model_dest_dir, "best_model.zip")
     
-    # Backup de l'ancien si présent
     if os.path.exists(dest_path):
         shutil.copy(dest_path, dest_path + ".bak")
         

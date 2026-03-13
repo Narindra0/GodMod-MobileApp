@@ -41,7 +41,8 @@ def extraire_features_classement(
     equipe_dom_id: int,
     equipe_ext_id: int,
     journee: int,
-    conn: sqlite3.Connection
+    conn: sqlite3.Connection,
+    session_id: Optional[int] = None
 ) -> Dict[str, float]:
     """
     Extrait les features de classement pour les deux équipes.
@@ -56,8 +57,10 @@ def extraire_features_classement(
         Dict avec rank_diff, points_diff, momentum_dom, momentum_ext
     """
     cursor = conn.cursor()
-    active_session = get_active_session()
-    session_id = active_session['id']
+    
+    if session_id is None:
+        active_session = get_active_session()
+        session_id = active_session['id']
     
     # Récupérer classement AVANT ce match pour la session active
     cursor.execute("""
@@ -141,7 +144,8 @@ def construire_observation(
     cote_1: float,
     cote_x: float,
     cote_2: float,
-    conn: sqlite3.Connection
+    conn: sqlite3.Connection,
+    session_id: Optional[int] = None
 ) -> np.ndarray:
     """
     Construit le vecteur d'observation complet pour l'agent RL.
@@ -151,7 +155,7 @@ def construire_observation(
     """
     # 1. Features de classement
     class_features = extraire_features_classement(
-        equipe_dom_id, equipe_ext_id, journee, conn
+        equipe_dom_id, equipe_ext_id, journee, conn, session_id
     )
     
     # 2. Features de cotes
