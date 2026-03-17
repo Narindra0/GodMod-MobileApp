@@ -1,67 +1,56 @@
 import os
-
-# URLs de base (extraites du README)
-URL_RESULTATS = "https://bet261.mg/virtual/category/instant-league/8035/results"
-URL_MATCHS = "https://bet261.mg/virtual/category/instant-league/8035/matches"
-URL_CLASSEMENT = "https://bet261.mg/virtual/category/instant-league/8035/ranking"
-
-# Dossiers et Chemins
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 LOGS_DIR = os.path.join(BASE_DIR, "logs")
-
-# Configuration de la base de données
 DB_NAME = os.path.join(DATA_DIR, "godmod_database.db")
-
-# Chemins des modèles ZEUS
 ZEUS_MODEL_PATH = os.path.join(MODELS_DIR, "zeus", "best", "best_model.zip")
 ZEUS_LOGS_DIR = os.path.join(LOGS_DIR, "zeus")
-
-# Équipes de la English Virtual League (20)
 EQUIPES = [
     "London Reds", "Manchester Blue", "Manchester Red", "Wolverhampton", "N. Forest",
     "Fulham", "West Ham", "Spurs", "London Blues", "Brighton",
     "Brentford", "Everton", "Aston Villa", "Leeds", "Sunderland",
     "Crystal Palace", "Liverpool", "Newcastle", "Burnley", "Bournemouth"
 ]
-
-# Alias pour normaliser les noms d'équipes (Site -> DB)
 TEAM_ALIASES = {
     "A. Villa": "Aston Villa",
     "C. Palace": "Crystal Palace",
     "Man Blue": "Manchester Blue",
     "Man Red": "Manchester Red",
 }
-
-# Paramètres de prédiction
 JOURNEE_DEPART_PREDICTION = 2
 MAX_PREDICTIONS_PAR_JOURNEE = 3
-
-# Système de points PRISMA (Attribution lors de la validation des prédictions)
-# Utilisé pour le calcul du score global de l'IA dans la table 'sessions'
-PRISMA_POINTS_VICTOIRE = 5  # Points alloués pour une prédiction correcte
-PRISMA_POINTS_DEFAITE = -8 # Points retirés pour une prédiction incorrecte
-
-# ============================================
-# CONFIGURATION DU SYSTÈME INTELLIGENT
-# ============================================
-
-# Mode d'intelligence activé par défaut au démarrage
+PRISMA_POINTS_VICTOIRE = 5  
+PRISMA_POINTS_DEFAITE = -8 
 USE_INTELLIGENCE_AMELIOREE = True
-
-# Sélection améliorée (Phase 3 complète)
 USE_SELECTION_AMELIOREE = True
-
-# État de ZEUS pendant l'entraînement automatique
-# Si True, ZEUS n'émet pas de prédictions pour éviter les conflits
 ZEUS_DEEP_SLEEP = False
-
-# ============================================
-# CONFIGURATION DES PARIS MULTIPLES (COMBINES)
-# ============================================
 ACTIVATE_MULTIPLE_BETS = True
 MAX_COMBINED_MATCHES = 3
-PERCENTAGE_BANKROLL_MULTIPLE = 0.05 # 5% pour le pari combiné
-MONTANT_FIXE_MULTIPLE = 1000  # Montant fixe en Ar pour les paris multiples
-USE_MONTANT_FIXE = True  # Utiliser montant fixe au lieu du pourcentage
+PERCENTAGE_BANKROLL_MULTIPLE = 0.05 
+MONTANT_FIXE_MULTIPLE = 1000  
+USE_MONTANT_FIXE = True  
+BANKROLL_STOP_LOSS = 1000  # Ar — seuil de sécurité : tout pari est suspendu en dessous
+
+TEAM_LOGOS = {
+    "Aston Villa": "https://i.ibb.co/nSL3kbr/A-Villa.png",
+    "Bournemouth": "https://i.ibb.co/Xr4YSPXG/Bournemouth.png",
+    "Brentford": "https://i.ibb.co/WpxwgCBY/Brentford.png",
+    "Brighton": "https://i.ibb.co/1GryRKMZ/Brighton.png",
+    "Burnley": "https://i.ibb.co/XxGDHzvs/Burnley.png",
+    "Crystal Palace": "https://i.ibb.co/Wp2N1y1N/C-Palace.png",
+    "Everton": "https://i.ibb.co/qMFDtqjc/Everton.png",
+    "Fulham": "https://i.ibb.co/Y4qckfs6/Fulham.png",
+    "Liverpool": "https://i.ibb.co/nsV4hSvf/Liverpool.png",
+    "Leeds": "https://i.ibb.co/5Wxf4vkR/Leeds.png",
+    "London Blues": "https://i.ibb.co/SwC4mfWf/London-Blues.png",
+    "London Reds": "https://i.ibb.co/Mk1zxtxd/London-Reds.png",
+    "Manchester Blue": "https://i.ibb.co/wF7MSBFp/Manchester-Blue.png",
+    "Manchester Red": "https://i.ibb.co/V0vzTQsC/Manchester-Red.png",
+    "Newcastle": "https://i.ibb.co/4RgpcZT9/Newcastle.png",
+    "N. Forest": "https://i.ibb.co/zWSmsQfC/N-Forest.png",
+    "Spurs": "https://i.ibb.co/DP9c3dt4/Spurs.png",
+    "Sunderland": "https://i.ibb.co/yB036qRS/Sunderland.png",
+    "Wolverhampton": "https://i.ibb.co/6VhKcC6/Wolverhampton.png",
+    "West Ham": "https://i.ibb.co/c0ndsF5/West-Ham.png"
+}

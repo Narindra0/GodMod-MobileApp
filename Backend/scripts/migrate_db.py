@@ -1,24 +1,26 @@
-
 import sqlite3
 import os
 
-# Chemins vers les bases de données
-OLD_DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'godmod_v2.db')
-NEW_DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'godmod_v3.db')
+try:
+    # Exécution attendue depuis le dossier Backend/
+    from src.core import config
+    _default_new_db = config.DB_NAME
+except Exception:
+    _default_new_db = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "godmod_database.db"))
 
-# --- 1. Définition du Nouveau Schéma ---
+OLD_DB_PATH = os.getenv(
+    "OLD_DB_PATH",
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "godmod_v2.db"))
+)
+NEW_DB_PATH = os.getenv("NEW_DB_PATH", _default_new_db)
 def create_new_schema(conn):
     cursor = conn.cursor()
-    
-    # Table equipes (inchangée)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS equipes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         nom TEXT UNIQUE NOT NULL
     );
     """)
-
-    # Table matches (fusion)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS matches (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,8 +38,6 @@ def create_new_schema(conn):
         UNIQUE(journee, equipe_dom_id, equipe_ext_id)
     );
     """)
-
-    # Table classement (unique)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS classement (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,8 +52,6 @@ def create_new_schema(conn):
         UNIQUE(journee, equipe_id)
     );
     """)
-
-    # Table predictions
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS predictions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,8 +63,6 @@ def create_new_schema(conn):
         FOREIGN KEY (match_id) REFERENCES matches(id)
     );
     """)
-
-    # Table sessions
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS sessions (
         session_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -80,8 +76,6 @@ def create_new_schema(conn):
         type_session TEXT CHECK(type_session IN ('TRAINING', 'EVALUATION', 'PRODUCTION'))
     );
     """)
-
-    # Table historique_paris
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS historique_paris (
         id_pari INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,46 +95,28 @@ def create_new_schema(conn):
     """)
     conn.commit()
     print("✅ Nouveau schéma créé avec succès.")
-
-
-# --- 2. Logique de Migration ---
 def migrate_data(old_conn, new_conn):
     old_cursor = old_conn.cursor()
     new_cursor = new_conn.cursor()
-
-    # equipes (copie simple)
     old_cursor.execute("SELECT * FROM equipes")
     new_cursor.executemany("INSERT INTO equipes VALUES (?, ?)", old_cursor.fetchall())
     print("Migrating equipes... OK")
-
-    # matches (fusion de cotes, resultats, matches_global)
-    # On utilise matches_global comme base
     old_cursor.execute("SELECT id, journee, equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2, score_dom, score_ext, status FROM matches_global")
     matches_data = old_cursor.fetchall()
     new_cursor.executemany("INSERT INTO matches (id, journee, equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2, score_dom, score_ext, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", matches_data)
     print("Migrating matches... OK")
-
-    # classement (copie simple, on ignore classement_global)
     old_cursor.execute("SELECT id, journee, equipe_id, position, points, forme, buts_pour, buts_contre FROM classement")
     classement_data = old_cursor.fetchall()
     new_cursor.executemany("INSERT INTO classement VALUES (?, ?, ?, ?, ?, ?, ?, ?)", classement_data)
     print("Migrating classement... OK")
-
-    # predictions (besoin de mapper l'ancien match_id au nouveau)
-    # On suppose que la combinaison (journee, dom, ext) est unique
     old_cursor.execute("SELECT p.id, mg.id as match_id, p.prediction, p.resultat, p.fiabilite, p.succes FROM predictions p JOIN matches_global mg ON p.journee = mg.journee AND p.equipe_dom_id = mg.equipe_dom_id AND p.equipe_ext_id = mg.equipe_ext_id")
     predictions_data = old_cursor.fetchall()
     new_cursor.executemany("INSERT INTO predictions (id, match_id, prediction, resultat, fiabilite, succes) VALUES (?, ?, ?, ?, ?, ?)", predictions_data)
     print("Migrating predictions... OK")
-
-    # sessions (copie simple, sans score_zeus)
     old_cursor.execute("SELECT session_id, timestamp_debut, timestamp_fin, capital_initial, capital_final, nombre_journees, version_ia, profit_total, type_session FROM sessions")
     sessions_data = old_cursor.fetchall()
     new_cursor.executemany("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", sessions_data)
     print("Migrating sessions... OK")
-
-    # historique_paris (le plus complexe)
-    # On doit retrouver le nouvel ID de prédiction
     old_cursor.execute("""
     SELECT hp.id_pari, hp.session_id, p.id as prediction_id, hp.mise_ar, hp.pourcentage_bankroll, hp.cote_jouee, hp.resultat, hp.profit_net, hp.bankroll_apres, hp.timestamp_pari, hp.action_id
     FROM historique_paris hp
@@ -150,33 +126,25 @@ def migrate_data(old_conn, new_conn):
     historique_data = old_cursor.fetchall()
     new_cursor.executemany("INSERT INTO historique_paris VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", historique_data)
     print("Migrating historique_paris... OK")
-
     new_conn.commit()
     print("✅ Migration des données terminée.")
-
-
-# --- Exécution Principale ---
 if __name__ == "__main__":
-    # Supprimer l'ancienne DB de migration si elle existe
     if os.path.exists(NEW_DB_PATH):
-        os.remove(NEW_DB_PATH)
-        print(f"Ancienne base de données '{NEW_DB_PATH}' supprimée.")
-
-    # Connexion aux bases de données
+        # Évite la suppression silencieuse d'une DB de prod : backup par défaut
+        backup_path = NEW_DB_PATH + ".bak"
+        i = 1
+        while os.path.exists(backup_path):
+            backup_path = f"{NEW_DB_PATH}.bak{i}"
+            i += 1
+        os.replace(NEW_DB_PATH, backup_path)
+        print(f"Base existante déplacée en backup: '{backup_path}'")
     try:
         old_db_conn = sqlite3.connect(OLD_DB_PATH)
         new_db_conn = sqlite3.connect(NEW_DB_PATH)
-
         print("🚀 Démarrage de la migration...")
-        
-        # 1. Créer le nouveau schéma
         create_new_schema(new_db_conn)
-        
-        # 2. Migrer les données
         migrate_data(old_db_conn, new_db_conn)
-
         print("\n🎉 Migration terminée avec succès !")
-
     except sqlite3.Error as e:
         print(f"❌ Erreur SQLite : {e}")
     finally:

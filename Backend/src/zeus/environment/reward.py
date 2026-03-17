@@ -1,7 +1,3 @@
-"""
-Calcul des récompenses avec pénalité asymétrique.
-"""
-
 from typing import Tuple, Optional
 
 
@@ -13,71 +9,45 @@ def calculer_recompense(
     score_zeus: int
 ) -> Tuple[float, int]:
     """
-    Calcule la récompense RL avec pénalité asymétrique pour les pertes.
-    Met également à jour le score ZEUS (+1 victoire, -1 défaite).
-    
-    Args:
-        mise: Montant misé en Ar
-        cote: Cote jouée (None si abstention)
-        resultat: True si gagné, False si perdu, None si abstention
-        capital_actuel: Capital actuel après le pari
-        score_zeus: Score actuel de ZEUS
-        
-    Returns:
-        Tuple (reward, nouveau_score_zeus)
+    Reward ZEUS v2 :
+    - reste proportionnelle au profit/perte
+    - intègre implicitement le pourcentage de bankroll via la mise
+    - garde une forte pénalisation de la banqueroute.
     """
-    # Cas 1: Abstention
     if resultat is None or mise == 0:
-        # Neutre pour l'abstention
         return 0.0, score_zeus
-    
-    # Cas 2: Victoire
+
+    # Normalisation principale par 1000 pour rester dans un ordre de grandeur stable.
+    scale = 1000.0
+
     if resultat:
         profit = mise * (cote - 1)
-        # Normalisation par 1000 + bonus de victoire
-        reward = (profit / 1000.0) + 0.1
+        # Bonus léger pour encourager les paris gagnants même de petite taille.
+        reward = (profit / scale) + 0.1
         nouveau_score = score_zeus + 1
         return reward, nouveau_score
-    
-    # Cas 3: Défaite
     else:
         perte = mise
-        # Pénalité asymétrique: les pertes coûtent 1.5x plus cher
-        # Normalisation par 1000
-        reward = -(perte * 1.5) / 1000.0
+        # On garde une asymétrie : les pertes sont plus pénalisées que les gains.
+        reward = -(perte * 1.5) / scale
         nouveau_score = score_zeus - 1
-        
-        # Pénalité terminale si banqueroute (normalisée)
+
+        # Forte pénalisation si la bankroll approche la banqueroute.
         if capital_actuel < 1000:
             reward -= 10.0
-        
+
         return reward, nouveau_score
-
-
 def determiner_resultat(
     type_pari: str,
     score_dom: int,
     score_ext: int
 ) -> bool:
-    """
-    Détermine si un pari est gagné selon le résultat final.
-    
-    Args:
-        type_pari: '1', 'N', '2', ou 'Aucun'
-        score_dom: Score équipe domicile
-        score_ext: Score équipe extérieur
-        
-    Returns:
-        True si pari gagné, False sinon
-    """
     if type_pari == 'Aucun':
         return False
-    
     if score_dom > score_ext:
         issue = '1'
     elif score_dom < score_ext:
         issue = '2'
     else:
         issue = 'N'
-    
     return type_pari == issue

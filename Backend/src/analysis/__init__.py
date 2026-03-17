@@ -1,8 +1,3 @@
-"""
-Module d'analyse intelligente GODMOD
-Contient les algorithmes PRISMA et les fonctions de prédiction
-"""
-
 from .intelligence import (
     calculer_probabilite,
     calculer_probabilite_avec_fallback,
@@ -11,7 +6,6 @@ from .intelligence import (
     mettre_a_jour_scoring,
     obtenir_predictions_zeus_journee
 )
-
 __all__ = [
     "calculer_probabilite",
     "calculer_probabilite_avec_fallback", 
