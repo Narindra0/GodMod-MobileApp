@@ -119,6 +119,7 @@ def register_routes(app: FastAPI):
                 SELECT p.id, m.journee, e1.nom as home, e1.logo_url as home_logo, 
                        e2.nom as away, e2.logo_url as away_logo, 
                        p.prediction, p.fiabilite, p.succes, m.status,
+                       m.score_dom as score_home, m.score_ext as score_away,
                        m.cote_1, m.cote_x, m.cote_2, p.source
                 FROM predictions p
                 JOIN matches m ON p.match_id = m.id
@@ -193,6 +194,7 @@ def register_routes(app: FastAPI):
                 SELECT p.id, m.journee, e1.nom as home, e1.logo_url as home_logo,
                        e2.nom as away, e2.logo_url as away_logo,
                        p.prediction, p.fiabilite, p.succes, m.status,
+                       m.score_dom as score_home, m.score_ext as score_away,
                        m.cote_1, m.cote_x, m.cote_2, p.source
                 FROM predictions p
                 JOIN matches m ON p.match_id = m.id
@@ -221,6 +223,7 @@ def register_routes(app: FastAPI):
                 SELECT 'SIMPLE' as type, p.id, m.journee, e1.nom as home, e1.logo_url as home_logo,
                        e2.nom as away, e2.logo_url as away_logo,
                        p.prediction, p.fiabilite, p.succes, m.status,
+                       m.score_dom as score_home, m.score_ext as score_away,
                        p.source, p.id as sort_key
                 FROM predictions p
                 JOIN matches m ON p.match_id = m.id

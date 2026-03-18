@@ -37,7 +37,7 @@ def initialize_team_logos():
                     cursor.execute("UPDATE equipes SET logo_url = ? WHERE nom = ? AND (logo_url IS NULL OR logo_url = '')", 
                                  (logo_url, team_name))
                     if cursor.rowcount > 0:
-                        print(f"✓ Logo mis à jour pour : {team_name}")
+                        print(f"[OK] Logo mis à jour pour : {team_name}")
                         updated_count += 1
                 
                 # Vérifie aussi avec les alias
@@ -47,7 +47,7 @@ def initialize_team_logos():
                         cursor.execute("UPDATE equipes SET logo_url = ? WHERE nom = ? AND (logo_url IS NULL OR logo_url = '')", 
                                      (logo_url, alias))
                         if cursor.rowcount > 0:
-                            print(f"✓ Logo mis à jour pour alias : {alias}")
+                            print(f"[OK] Logo mis à jour pour alias : {alias}")
                             updated_count += 1
                 
                 conn.commit()
@@ -63,15 +63,15 @@ def initialize_team_logos():
 
 def initialize_all():
     """Initialise toutes les données requises au démarrage"""
-    print("🚀 Initialisation des données...")
+    print("[START] Initialisation des données...")
     
     prisma_created = initialize_prisma_file()
     logos_updated = initialize_team_logos()
     
     if prisma_created or logos_updated:
-        print("✅ Initialisation terminée avec succès!")
+        print("[OK] Initialisation terminée avec succès!")
     else:
-        print("ℹ️  Toutes les données sont déjà initialisées.")
+        print("[INFO] Toutes les données sont déjà initialisées.")
 
 if __name__ == "__main__":
     initialize_all()

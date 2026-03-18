@@ -11,6 +11,7 @@ from ..prisma import selection as prisma_selection
 from ..zeus.models.inference import get_zeus_model, predire_pari_zeus, formater_decision_zeus
 from ..zeus.database.queries import get_matches_for_journee, enregistrer_pari, valider_paris_zeus
 from . import multiple_bets
+from ..core.console import console, print_verbose
 from ..core.prisma_finance import is_prisma_stop_loss_active
 
 logger = logging.getLogger(__name__)
@@ -166,10 +167,10 @@ def _selectionner_meilleurs_matchs_internal(conn, session_id, journee):
 def selectionner_meilleurs_matchs_ameliore(journee, conn=None):
     _reload_config()
     if getattr(config, 'ZEUS_DEEP_SLEEP', False):
-        print(f"💤 [IA] Sommeil Profond actif (Entraînement ZEUS). Aucune prédiction.")
+        print_verbose(f"💤 [IA] Sommeil Profond actif (Entraînement ZEUS). Aucune prédiction.")
         return []
     if journee < 4:
-        print(f"Info : Journée {journee} < 4. Pas assez de données.")
+        print_verbose(f"Info : Journée {journee} < 4. Pas assez de données.")
         return []
     active_session = get_active_session(conn=conn)
     session_id = active_session['id']
@@ -183,13 +184,13 @@ def selectionner_meilleurs_matchs_ameliore(journee, conn=None):
         return []
 def _selectionner_meilleurs_matchs_ameliore_internal(conn, session_id, journee):
     if is_prisma_stop_loss_active():
-        print(f"   ⛔ [STOP-LOSS] Bankroll PRISMA sous {config.BANKROLL_STOP_LOSS} Ar. Aucune prédiction PRISMA générée.")
+        print_verbose(f"   ⛔ [STOP-LOSS] Bankroll PRISMA sous {config.BANKROLL_STOP_LOSS} Ar. Aucune prédiction PRISMA générée.")
         logger.warning(f"[STOP-LOSS] Bankroll PRISMA sous seuil. Paris PRISMA suspendus.")
         return []
     cursor = conn.cursor()
     taux_succes, _ = analyser_performances_recentes(conn=conn)
     seuil_confiance, mode_descr = prisma_selection.determiner_seuil_dynamique(taux_succes)
-    print(f"   [PRISMA] Mode {mode_descr} | Seuil: {seuil_confiance}")
+    print_verbose(f"   [PRISMA] Mode {mode_descr} | Seuil: {seuil_confiance}")
     cursor.execute("SELECT id, equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2 FROM matches WHERE session_id = ? AND journee = ?", (session_id, journee))
     matchs = cursor.fetchall()
     cursor.execute("SELECT id, nom FROM equipes")
@@ -287,7 +288,7 @@ def obtenir_predictions_zeus_journee(journee: int) -> List[Dict]:
                     if mise_ar > 0 and details['type'] != 'Aucun':
                         if capital_actuel < config.BANKROLL_STOP_LOSS:
                             logger.warning(f"[STOP-LOSS] Bankroll ZEUS ({capital_actuel} Ar) sous le seuil ({config.BANKROLL_STOP_LOSS} Ar). Arrêt des paris ZEUS.")
-                            print(f"   ⛔ [STOP-LOSS] Bankroll ZEUS ({capital_actuel} Ar) < {config.BANKROLL_STOP_LOSS} Ar. Paris suspendus.")
+                            print_verbose(f"   ⛔ [STOP-LOSS] Bankroll ZEUS ({capital_actuel} Ar) < {config.BANKROLL_STOP_LOSS} Ar. Paris suspendus.")
                             break
                         # Check if match is already in a combo
                         cursor.execute("""
@@ -369,6 +370,6 @@ def mettre_a_jour_scoring():
             valider_paris_zeus(conn)
     except Exception as e:
         logger.error(f"Erreur lors de la mise à jour du scoring : {e}", exc_info=True)
-        print(f"❌ Erreur lors de la mise à jour du scoring : {e}")
+        print_verbose(f"❌ Erreur lors de la mise à jour du scoring : {e}")
         return
-    print("Mise a jour du scoring terminee.")
+    print_verbose("Mise a jour du scoring terminee.")

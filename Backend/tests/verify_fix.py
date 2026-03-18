@@ -3,7 +3,7 @@ import os
 import sys
 
 # Assure que le dossier Backend/ est dans sys.path (portable)
-BACKEND_DIR = os.path.abspath(os.path.dirname(__file__))
+BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
 

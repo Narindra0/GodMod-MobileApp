@@ -12,7 +12,7 @@ from src.api.matches_filter import extract_matches_with_local_ids
 from src.api.db_integration import insert_api_ranking, insert_api_results, insert_api_matches
 from src.core.database import get_db_connection
 from src.core.session_manager import get_active_session, update_session_day
-from src.core.console import console, print_info, print_success, print_error, print_warning, print_step, create_panel, create_table
+from src.core.console import console, print_info, print_success, print_error, print_warning, print_step, create_panel, create_table, print_verbose
 import threading
 from src.zeus.training.self_improvement import trigger_zeus_improvement
 from src.analysis.intelligence import vider_cache_intelligence
@@ -128,8 +128,8 @@ def start_monitoring(callback_on_new_journee=None, verbose=True):
     ))
     last_journee_db = get_max_journee_in_db()
     logger.info(f"[MONITOR] Journee initiale en BDD : J{last_journee_db}")
-    print_info(f"Journee actuelle en BDD : J{last_journee_db}")
-    print_info("Surveillance en cours... (CTRL+C pour arreter)")
+    print_verbose(f"Journee actuelle en BDD : J{last_journee_db}")
+    print_verbose("Surveillance en cours... (CTRL+C pour arreter)")
     console.print()
     consecutive_errors = 0
     try:
@@ -197,7 +197,7 @@ def start_monitoring(callback_on_new_journee=None, verbose=True):
                         print_warning(f"Collecte incomplete, nouvelle tentative dans {MONITOR_CONFIG['POLL_INTERVAL']}s")
                 elif verbose and MONITOR_CONFIG["LOG_ACTIVITY"]:
                     timestamp = datetime.now().strftime("%H:%M:%S")
-                    console.print(f"[{timestamp}] [dim]Surveillance... (BDD: J{last_journee_db}, API: J{api_journee})[/]", end='\r')
+                    print_verbose(f"Surveillance... (BDD: J{last_journee_db}, API: J{api_journee})")
                 base_interval = MONITOR_CONFIG['POLL_INTERVAL']
                 jitter = base_interval * 0.4
                 sleep_time = random.uniform(base_interval - jitter, base_interval + jitter)

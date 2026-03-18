@@ -7,7 +7,7 @@ try:
     _default_db_path = config.DB_NAME
 except Exception:
     # Fallback minimal si le module n'est pas importable
-    _default_db_path = os.path.join(os.path.dirname(__file__), "data", "godmod_database.db")
+    _default_db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "godmod_database.db"))
 
 db_path = os.getenv("DB_PATH", _default_db_path)
 
