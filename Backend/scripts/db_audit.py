@@ -81,7 +81,7 @@ def get_db_schem_info():
                 )
             
             # Row count
-            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+            cursor.execute("SELECT COUNT(*) FROM %s", (table_name,))
             row_count = cursor.fetchone()
             schem_info[table_name]['row_count'] = row_count['count']
             

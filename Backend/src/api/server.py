@@ -15,6 +15,15 @@ import logging
 
 logger = logging.getLogger("server")
 
+def execute_prediction_query(cursor, query: str, params: tuple = ()) -> List[Dict[str, Any]]:
+    """
+    Fonction utilitaire pour exécuter des requêtes de prédiction avec la structure de jointure commune
+    Évite la duplication du code SQL complexe
+    """
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    return [dict(row) for row in rows]
+
 # Pydantic models
 class ResetRequest(BaseModel):
     confirmation: str
@@ -196,7 +205,7 @@ def register_routes(app: FastAPI):
         session_id = active_session['id']
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            query = """
                 SELECT p.id, m.journee, e1.nom as home, e1.logo_url as home_logo, 
                        e2.nom as away, e2.logo_url as away_logo, 
                        p.prediction, p.fiabilite, p.succes, m.status,
@@ -215,9 +224,8 @@ def register_routes(app: FastAPI):
                     WHERE pm.session_id = %s AND pm.resultat IS NULL
                 )
                 ORDER BY m.journee DESC
-            """, (session_id, session_id))
-            rows = cursor.fetchall()
-            return [dict(row) for row in rows]
+            """
+            return execute_prediction_query(cursor, query, (session_id, session_id))
 
     @app.get("/predictions/combo")
     async def get_combo_predictions():

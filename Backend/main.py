@@ -176,12 +176,12 @@ def reset_database_api():
             
             for table in tables_to_clear:
                 # Compter avant suppression (PostgreSQL utilise des dictionnaires)
-                cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                cursor.execute("SELECT COUNT(*) FROM %s", (table,))
                 result = cursor.fetchone()
                 count_before = result['count']
                 
                 # Supprimer toutes les données
-                cursor.execute(f"DELETE FROM {table}")
+                cursor.execute("DELETE FROM %s", (table,))
                 
                 deleted_counts[table] = count_before
             
