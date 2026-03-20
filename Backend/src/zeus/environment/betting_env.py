@@ -2,17 +2,11 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import random
-import sqlite3
-from ..database.queries import (
-    get_matches_for_journee,
-    create_session,
-    enregistrer_pari,
-    finaliser_session
-)
 from .observation import construire_observation
 from .reward import calculer_recompense, determiner_resultat
 from ..utils.risk_manager import RiskManager
 from ...core.database import get_db_connection
+from typing import Dict, List, Tuple, Optional
 
 # Espace d'actions basé sur des montants fixes (en Ariary).
 # 0 = aucun pari, les autres actions sont des combinaisons
@@ -38,7 +32,6 @@ class BettingEnv(gym.Env):
 
     def __init__(
         self,
-        db_path: str,
         capital_initial: int = 20000,
         journee_debut: int = 1,
         journee_fin: int = 38,
@@ -47,7 +40,6 @@ class BettingEnv(gym.Env):
         feature_session_id: Optional[int] = None
     ):
         super().__init__()
-        self.db_path = db_path
         self.capital_initial = capital_initial
         self.journee_debut = journee_debut
         self.journee_fin = journee_fin
@@ -67,7 +59,8 @@ class BettingEnv(gym.Env):
         self.matches_restants: List[Dict] = []
         self.match_actuel: Optional[Dict] = None
         self.session_id: Optional[int] = None
-        self.conn: Optional[sqlite3.Connection] = None
+        self.session_id: Optional[int] = None
+        self.conn = None
         self.risk_manager = RiskManager(capital_initial)
         self.historique_capital = []
         self.total_paris = 0
@@ -88,14 +81,13 @@ class BettingEnv(gym.Env):
         self.total_paris = 0
         self.paris_gagnants = 0
         if self.conn is None:
-            self.conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
-            self.conn.row_factory = sqlite3.Row
-            self.conn.execute("PRAGMA journal_mode = WAL")
-            self.conn.execute("PRAGMA busy_timeout = 30000")
+            # On utilise get_db_connection qui gère déjà PostgreSQL via .env
+            self.conn_context = get_db_connection(write=(self.mode == 'train'))
+            self.conn = self.conn_context.__enter__()
 
         # En mode entraînement, on crée une session en base.
-        # En mode évaluation, on reste en lecture seule pour éviter de verrouiller la base.
         if self.mode == 'train':
+            from ..database.queries import create_session
             type_session = 'TRAINING'
             self.session_id = create_session(
                 self.capital_initial,
@@ -114,6 +106,7 @@ class BettingEnv(gym.Env):
         info = self._get_info()
         return observation, info
     def _charger_matches(self):
+        from ..database.queries import get_matches_for_journee
         all_matches = []
         for journee in range(self.journee_debut, self.journee_fin + 1):
             matches = get_matches_for_journee(
@@ -174,11 +167,11 @@ class BettingEnv(gym.Env):
             mise_finale = 0
             type_pari = 'Aucun'
         if type_pari == '1':
-            cote_jouee = self.match_actuel['cote_1']
+            cote_jouee = float(self.match_actuel['cote_1']) if self.match_actuel['cote_1'] is not None else None
         elif type_pari == 'N':
-            cote_jouee = self.match_actuel['cote_x']
+            cote_jouee = float(self.match_actuel['cote_x']) if self.match_actuel['cote_x'] is not None else None
         elif type_pari == '2':
-            cote_jouee = self.match_actuel['cote_2']
+            cote_jouee = float(self.match_actuel['cote_2']) if self.match_actuel['cote_2'] is not None else None
         else:
             cote_jouee = None
         prob_implicite = 1.0 / cote_jouee if cote_jouee and cote_jouee > 0 else None
@@ -213,19 +206,20 @@ class BettingEnv(gym.Env):
 
         # En évaluation, on n'écrit pas dans l'historique pour éviter les verrous.
         if self.session_id is not None:
+            from ..database.queries import enregistrer_pari
             enregistrer_pari(
                 session_id=self.session_id,
                 prediction_id=self.match_actuel['id'],
                 journee=self.match_actuel['journee'],
                 type_pari=type_pari,
-                mise_ar=mise_finale,
-                pourcentage_bankroll=pourcentage_reel,
-                cote_jouee=cote_jouee,
+                mise_ar=int(mise_finale),
+                pourcentage_bankroll=float(pourcentage_reel),
+                cote_jouee=float(cote_jouee) if cote_jouee else None,
                 resultat=1 if pari_gagne is True else (0 if pari_gagne is False else None),
-                profit_net=profit_net,
-                bankroll_apres=self.capital,
-                probabilite_implicite=prob_implicite,
-                action_id=action,
+                profit_net=int(profit_net),
+                bankroll_apres=int(self.capital),
+                probabilite_implicite=float(prob_implicite) if prob_implicite else None,
+                action_id=int(action),
                 conn=self.conn
             )
         self.historique_capital.append(self.capital)
@@ -238,6 +232,7 @@ class BettingEnv(gym.Env):
         else:
             terminated = True
             if self.session_id is not None:
+                from ..database.queries import finaliser_session
                 profit_total = self.capital - self.capital_initial
                 finaliser_session(
                     self.session_id,
@@ -252,5 +247,5 @@ class BettingEnv(gym.Env):
         return next_observation, reward, terminated, truncated, info
     def close(self):
         if self.conn is not None:
-            self.conn.close()
+            self.conn_context.__exit__(None, None, None)
             self.conn = None

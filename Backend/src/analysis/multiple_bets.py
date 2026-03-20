@@ -34,15 +34,15 @@ def _generer_pari_internal(conn, journee, selection, session_id, active_session)
             cursor.execute("""
                 SELECT 
                     CASE 
-                        WHEN ? = '1' THEN cote_1
-                        WHEN ? = 'X' THEN cote_x
-                        WHEN ? = '2' THEN cote_2
+                        WHEN %s = '1' THEN cote_1
+                        WHEN %s = 'X' THEN cote_x
+                        WHEN %s = '2' THEN cote_2
                     END
-                FROM matches WHERE id = ?
+                FROM matches WHERE id = %s
             """, (p['prediction'], p['prediction'], p['prediction'], p['match_id']))
             row = cursor.fetchone()
-            if row and row[0]:
-                cote_totale *= float(row[0])
+            if row and row['case']:
+                cote_totale *= float(row['case'])
                 prediction_ids.append(p.get('id') or p.get('prediction_id')) 
             else:
                 logger.warning(f"Cote introuvable pour le match {p['match_id']}, prédiction {p['prediction']}")
@@ -66,15 +66,16 @@ def _generer_pari_internal(conn, journee, selection, session_id, active_session)
             return None
         cursor.execute("""
             INSERT INTO pari_multiple (session_id, journee, mise_ar, cote_totale)
-            VALUES (?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id
         """, (session_id, journee, mise_ar, cote_totale))
-        pari_id = cursor.lastrowid
+        pari_id = cursor.fetchone()['id']
         for pred_id in prediction_ids:
             if pred_id is None:
                 continue
             cursor.execute("""
                 INSERT INTO pari_multiple_items (pari_multiple_id, prediction_id)
-                VALUES (?, ?)
+                VALUES (%s, %s)
             """, (pari_id, pred_id))
         logger.info(f"Pari multiple créé (ID: {pari_id}) : {len(prediction_ids)} matchs, Cote: {cote_totale:.2f}, Mise: {mise_ar} Ar")
         return {
@@ -101,24 +102,24 @@ def _valider_paris_multiples_internal(conn, session_id):
     cursor = conn.cursor()
     cursor.execute("""
         SELECT id, mise_ar, cote_totale FROM pari_multiple 
-        WHERE session_id = ? AND resultat IS NULL
+        WHERE session_id = %s AND resultat IS NULL
     """, (session_id,))
     paris_en_attente = cursor.fetchall()
     if not paris_en_attente:
         return
     prisma_bankroll = get_prisma_bankroll()
     for pari in paris_en_attente:
-        pari_id, mise, cote = pari
+        pari_id, mise, cote = pari['id'], pari['mise_ar'], pari['cote_totale']
         cursor.execute("""
             SELECT p.succes 
             FROM pari_multiple_items pmi
             JOIN predictions p ON pmi.prediction_id = p.id
-            WHERE pmi.pari_multiple_id = ?
+            WHERE pmi.pari_multiple_id = %s
         """, (pari_id,))
         resultats = cursor.fetchall()
-        if not resultats or any(r[0] is None for r in resultats):
+        if not resultats or any(r['succes'] is None for r in resultats):
             continue  
-        tout_gagne = all(r[0] == 1 for r in resultats)
+        tout_gagne = all(r['succes'] == 1 for r in resultats)
         resultat = 1 if tout_gagne else 0
         profit_net = int(mise * (cote - 1)) if tout_gagne else -mise
         nouveau_bankroll = prisma_bankroll + profit_net
@@ -127,11 +128,11 @@ def _valider_paris_multiples_internal(conn, session_id):
         delta_score = config.PRISMA_POINTS_VICTOIRE if tout_gagne else config.PRISMA_POINTS_DEFAITE
         cursor.execute("""
             UPDATE pari_multiple 
-            SET resultat = ?, profit_net = ?, bankroll_apres = ?
-            WHERE id = ?
+            SET resultat = %s, profit_net = %s, bankroll_apres = %s
+            WHERE id = %s
         """, (resultat, profit_net, nouveau_bankroll, pari_id))
         cursor.execute(
-            "UPDATE sessions SET score_prisma = score_prisma + ? WHERE id = ?",
+            "UPDATE sessions SET score_prisma = score_prisma + %s WHERE id = %s",
             (delta_score, session_id)
         )
         logger.info(

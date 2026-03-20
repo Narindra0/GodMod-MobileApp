@@ -1,4 +1,3 @@
-import sqlite3
 import logging
 from typing import List, Dict, Tuple
 import sys
@@ -43,9 +42,9 @@ def insert_api_ranking(ranking_data: List[Dict], session_id: int = None) -> int:
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT nom, id FROM equipes")
-        equipes_map = {row[0]: row[1] for row in cursor.fetchall()}
+        equipes_map = {row['nom']: row['id'] for row in cursor.fetchall()}
         
-        cursor.execute("DELETE FROM classement WHERE session_id = ? AND journee = ?", (session_id, journee))
+        cursor.execute("DELETE FROM classement WHERE session_id = %s AND journee = %s", (session_id, journee))
         
         insert_data = []
         for team in ranking_data:
@@ -59,14 +58,14 @@ def insert_api_ranking(ranking_data: List[Dict], session_id: int = None) -> int:
                 
                 cursor.execute("""
                     SELECT 
-                        SUM(CASE WHEN equipe_dom_id = ? THEN score_dom ELSE score_ext END) as bp,
-                        SUM(CASE WHEN equipe_dom_id = ? THEN score_ext ELSE score_dom END) as bc
+                        SUM(CASE WHEN equipe_dom_id = %s THEN score_dom ELSE score_ext END) as bp,
+                        SUM(CASE WHEN equipe_dom_id = %s THEN score_ext ELSE score_dom END) as bc
                     FROM matches 
-                    WHERE session_id = ? AND (equipe_dom_id = ? OR equipe_ext_id = ?) AND score_dom IS NOT NULL
+                    WHERE session_id = %s AND (equipe_dom_id = %s OR equipe_ext_id = %s) AND score_dom IS NOT NULL
                 """, (equipe_id, equipe_id, session_id, equipe_id, equipe_id))
                 stats_buts = cursor.fetchone()
-                buts_pour = stats_buts[0] if stats_buts and stats_buts[0] is not None else 0
-                buts_contre = stats_buts[1] if stats_buts and stats_buts[1] is not None else 0
+                buts_pour = stats_buts['bp'] if stats_buts and stats_buts['bp'] is not None else 0
+                buts_contre = stats_buts['bc'] if stats_buts and stats_buts['bc'] is not None else 0
                 
                 insert_data.append((session_id, journee, equipe_id, position, points, forme, buts_pour, buts_contre))
             else:
@@ -75,7 +74,7 @@ def insert_api_ranking(ranking_data: List[Dict], session_id: int = None) -> int:
         if insert_data:
             cursor.executemany("""
                 INSERT INTO classement (session_id, journee, equipe_id, position, points, forme, buts_pour, buts_contre)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """, insert_data)
             count = len(insert_data)
         
@@ -93,7 +92,7 @@ def insert_api_results(results_data: List[Dict], session_id: int = None) -> Tupl
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT nom, id FROM equipes")
-        equipes_map = {row[0]: row[1] for row in cursor.fetchall()}
+        equipes_map = {row['nom']: row['id'] for row in cursor.fetchall()}
         
         for round_data in results_data:
             journee = round_data.get("roundNumber")
@@ -117,14 +116,14 @@ def insert_api_results(results_data: List[Dict], session_id: int = None) -> Tupl
                     
                     cursor.execute("""
                         UPDATE matches 
-                        SET score_dom = ?, score_ext = ?, status = 'TERMINE'
-                        WHERE session_id = ? AND journee = ? AND equipe_dom_id = ? AND equipe_ext_id = ?
+                        SET score_dom = %s, score_ext = %s, status = 'TERMINE'
+                        WHERE session_id = %s AND journee = %s AND equipe_dom_id = %s AND equipe_ext_id = %s
                     """, (score_dom, score_ext, session_id, journee, home_id, away_id))
                     
                     if cursor.rowcount == 0:
                         cursor.execute("""
                             INSERT INTO matches (session_id, journee, equipe_dom_id, equipe_ext_id, score_dom, score_ext, status)
-                            VALUES (?, ?, ?, ?, ?, ?, 'TERMINE')
+                            VALUES (%s, %s, %s, %s, %s, %s, 'TERMINE')
                         """, (session_id, journee, home_id, away_id, score_dom, score_ext))
                     else:
                         validated_count += 1
@@ -143,7 +142,7 @@ def insert_api_matches(matches_data: List[Dict], session_id: int = None) -> int:
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT nom, id FROM equipes")
-        equipes_map = {row[0]: row[1] for row in cursor.fetchall()}
+        equipes_map = {row['nom']: row['id'] for row in cursor.fetchall()}
         
         insert_data = []
         for round_data in matches_data:
@@ -169,7 +168,7 @@ def insert_api_matches(matches_data: List[Dict], session_id: int = None) -> int:
         if insert_data:
             cursor.executemany("""
                 INSERT INTO matches (session_id, journee, equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'A_VENIR')
+                VALUES (%s, %s, %s, %s, %s, %s, %s, 'A_VENIR')
                 ON CONFLICT(session_id, journee, equipe_dom_id, equipe_ext_id) DO UPDATE SET
                     cote_1 = excluded.cote_1,
                     cote_x = excluded.cote_x,

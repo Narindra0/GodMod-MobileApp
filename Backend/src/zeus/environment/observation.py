@@ -1,5 +1,4 @@
-import sqlite3
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 import numpy as np
 import logging
 from src.core.session_manager import get_active_session
@@ -18,7 +17,7 @@ def extraire_features_classement(
     equipe_dom_id: int,
     equipe_ext_id: int,
     journee: int,
-    conn: sqlite3.Connection,
+    conn: Any,
     session_id: Optional[int] = None
 ) -> Dict[str, float]:
     cursor = conn.cursor()
@@ -28,21 +27,21 @@ def extraire_features_classement(
     cursor.execute("""
         SELECT equipe_id, position, points, forme
         FROM classement
-        WHERE session_id = ? AND journee = (
+        WHERE session_id = %s AND journee = (
             SELECT MAX(journee) 
             FROM classement 
-            WHERE session_id = ? AND journee < ?
+            WHERE session_id = %s AND journee < %s
         )
-        AND equipe_id IN (?, ?)
+        AND equipe_id IN (%s, %s)
     """, (session_id, session_id, journee, equipe_dom_id, equipe_ext_id))
     rows = cursor.fetchall()
     data = {}
     for row in rows:
-        equipe_id = row[0]
+        equipe_id = row['equipe_id']
         data[equipe_id] = {
-            'position': row[1] if row[1] is not None else 10,
-            'points': row[2] if row[2] is not None else 0,
-            'forme': row[3]
+            'position': row['position'] if row['position'] is not None else 10,
+            'points': row['points'] if row['points'] is not None else 0,
+            'forme': row['forme']
         }
     dom_data = data.get(equipe_dom_id, {'position': 10, 'points': 0, 'forme': ''})
     ext_data = data.get(equipe_ext_id, {'position': 10, 'points': 0, 'forme': ''})
@@ -57,6 +56,11 @@ def extraire_features_classement(
         'momentum_ext': momentum_ext
     }
 def extraire_features_cotes(cote_1: float, cote_x: float, cote_2: float) -> Dict[str, float]:
+    # Convertir Decimal en float si nécessaire
+    cote_1 = float(cote_1) if cote_1 is not None else None
+    cote_x = float(cote_x) if cote_x is not None else None
+    cote_2 = float(cote_2) if cote_2 is not None else None
+    
     prob_1 = 1.0 / cote_1 if cote_1 and cote_1 > 0 else 0.33
     prob_x = 1.0 / cote_x if cote_x and cote_x > 0 else 0.33
     prob_2 = 1.0 / cote_2 if cote_2 and cote_2 > 0 else 0.33
@@ -77,7 +81,7 @@ def construire_observation(
     cote_1: float,
     cote_x: float,
     cote_2: float,
-    conn: sqlite3.Connection,
+    conn: Any,
     session_id: Optional[int] = None
 ) -> np.ndarray:
     class_features = extraire_features_classement(

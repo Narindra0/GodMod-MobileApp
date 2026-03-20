@@ -1,9 +1,8 @@
 import os
-import sqlite3
-from typing import Optional
 from ..environment.betting_env import BettingEnv
 from ..models.ppo_agent import create_ppo_agent, create_callbacks
 from ...core import config
+from ...core.database import get_db_connection
 
 
 def _select_completed_training_session(db_path: str) -> Optional[int]:
@@ -11,23 +10,22 @@ def _select_completed_training_session(db_path: str) -> Optional[int]:
     Sélectionne une session dont les matches couvrent au moins les journées 1 à 37 (incluses).
     On ne considère que ces sessions "complètes" pour entraîner ZEUS.
     """
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT s.id
-        FROM sessions s
-        JOIN matches m ON m.session_id = s.id
-        WHERE m.status = 'TERMINE'
-        GROUP BY s.id
-        HAVING COUNT(DISTINCT CASE WHEN m.journee BETWEEN 1 AND 37 THEN m.journee END) = 37
-        ORDER BY s.id DESC
-        LIMIT 1
-        """
-    )
-    row = cursor.fetchone()
-    conn.close()
-    return row[0] if row else None
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT s.id
+            FROM sessions s
+            JOIN matches m ON m.session_id = s.id
+            WHERE m.status = 'TERMINE'
+            GROUP BY s.id
+            HAVING COUNT(DISTINCT CASE WHEN m.journee BETWEEN 1 AND 37 THEN m.journee END) = 37
+            ORDER BY s.id DESC
+            LIMIT 1
+            """
+        )
+        row = cursor.fetchone()
+        return row['id'] if row else None
 
 
 def train_zeus_agent(
@@ -61,52 +59,52 @@ def train_zeus_agent(
     )
     # Détermination automatique des plages de journées si non précisées (Mode Flex).
     if journee_debut_train is None:
-        conn = sqlite3.connect(current_db_path)
-        cursor = conn.cursor()
-        # IMPORTANT : on ne considère que les matches de la session sélectionnée.
-        cursor.execute(
-            "SELECT DISTINCT journee FROM matches "
-            "WHERE status = 'TERMINE' AND session_id = ? "
-            "ORDER BY journee",
-            (feature_session_id,),
-        )
-        all_journees = [row[0] for row in cursor.fetchall()]
-
-        if len(all_journees) < 10:
-            conn.close()
-            raise ValueError(
-                f"Pas assez de données dans {current_db_path}. "
-                f"Trouvé {len(all_journees)} journées, besoin d'au moins 10."
-            )
-
-        split_idx = int(len(all_journees) * 0.8)
-        journee_debut_train = all_journees[0]
-        journee_fin_train = all_journees[split_idx - 1]
-        journee_debut_eval = all_journees[split_idx]
-        journee_fin_eval = all_journees[-1]
-
-        # Stats basiques sur la distribution des données (nombre de matches).
-        def count_matches(j_start: int, j_end: int) -> int:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            # IMPORTANT : on ne considère que les matches de la session sélectionnée.
             cursor.execute(
-                "SELECT COUNT(*) FROM matches "
-                "WHERE status = 'TERMINE' AND journee BETWEEN ? AND ?",
-                (j_start, j_end),
+                "SELECT DISTINCT journee FROM matches "
+                "WHERE status = 'TERMINE' AND session_id = %s "
+                "ORDER BY journee",
+                (feature_session_id,),
             )
-            return cursor.fetchone()[0]
+            all_journees = [row['journee'] for row in cursor.fetchall()]
 
-        n_matches_train = count_matches(journee_debut_train, journee_fin_train)
-        n_matches_eval = count_matches(journee_debut_eval, journee_fin_eval)
-        conn.close()
+            if len(all_journees) < 10:
+                conn.close()
+                raise ValueError(
+                    f"Pas assez de données dans {current_db_path}. "
+                    f"Trouvé {len(all_journees)} journées, besoin d'au moins 10."
+                )
 
-        print(f"📊 Mode Flex: {len(all_journees)} journées TERMINE dans la base")
-        print(
-            f"📊 Train: Journées {journee_debut_train} à {journee_fin_train} "
-            f"({n_matches_train} matches)"
-        )
-        print(
-            f"📊 Eval:  Journées {journee_debut_eval} à {journee_fin_eval} "
-            f"({n_matches_eval} matches)"
-        )
+            split_idx = int(len(all_journees) * 0.8)
+            journee_debut_train = all_journees[0]
+            journee_fin_train = all_journees[split_idx - 1]
+            journee_debut_eval = all_journees[split_idx]
+            journee_fin_eval = all_journees[-1]
+
+            # Stats basiques sur la distribution des données (nombre de matches).
+            def count_matches(j_start: int, j_end: int) -> int:
+                cursor.execute(
+                    "SELECT COUNT(*) as count FROM matches "
+                    "WHERE status = 'TERMINE' AND journee BETWEEN %s AND %s",
+                    (j_start, j_end),
+                )
+                result = cursor.fetchone()
+                return result['count'] if result else 0
+
+            n_matches_train = count_matches(journee_debut_train, journee_fin_train)
+            n_matches_eval = count_matches(journee_debut_eval, journee_fin_eval)
+
+            print(f"📊 Mode Flex: {len(all_journees)} journées TERMINE dans la base")
+            print(
+                f"📊 Train: Journées {journee_debut_train} à {journee_fin_train} "
+                f"({n_matches_train} matches)"
+            )
+            print(
+                f"📊 Eval:  Journées {journee_debut_eval} à {journee_fin_eval} "
+                f"({n_matches_eval} matches)"
+            )
     else:
         print(
             f"📊 Plages manuelles: "
@@ -115,7 +113,6 @@ def train_zeus_agent(
         )
     print("\n🔧 Création des environnements...")
     train_env = BettingEnv(
-        db_path=current_db_path,
         capital_initial=20000,
         journee_debut=journee_debut_train,
         journee_fin=journee_fin_train,
@@ -124,7 +121,6 @@ def train_zeus_agent(
         feature_session_id=feature_session_id
     )
     eval_env = BettingEnv(
-        db_path=current_db_path,
         capital_initial=20000,
         journee_debut=journee_debut_eval,
         journee_fin=journee_fin_eval,

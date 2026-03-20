@@ -3,7 +3,8 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 LOGS_DIR = os.path.join(BASE_DIR, "logs")
-DB_NAME = os.path.join(DATA_DIR, "godmod_database.db")
+# DB_NAME est obsolète, PostgreSQL est utilisé via les variables d'environnement dans .env
+DB_NAME = None
 ZEUS_MODEL_PATH = os.path.join(MODELS_DIR, "zeus", "best", "best_model.zip")
 ZEUS_LOGS_DIR = os.path.join(LOGS_DIR, "zeus")
 EQUIPES = [
@@ -32,7 +33,7 @@ MAX_COMBINED_MATCHES = 3
 PERCENTAGE_BANKROLL_MULTIPLE = 0.05 
 MONTANT_FIXE_MULTIPLE = 1000  
 USE_MONTANT_FIXE = True  
-BANKROLL_STOP_LOSS = 1000  # Ar — seuil de sécurité : tout pari est suspendu en dessous
+BANKROLL_STOP_LOSS = 5000  # Ar — seuil de sécurité : tout pari est suspendu en dessous
 
 TEAM_LOGOS = {
     "Aston Villa": "https://i.ibb.co/nSL3kbr/A-Villa.png",
@@ -56,3 +57,16 @@ TEAM_LOGOS = {
     "Wolverhampton": "https://i.ibb.co/6VhKcC6/Wolverhampton.png",
     "West Ham": "https://i.ibb.co/c0ndsF5/West-Ham.png"
 }
+
+# --- Intégration IA Google Gemini ---
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+
+# --- Intégration IA Groq (Fallback) ---
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+
+# --- Intégration IA DeepSeek (Officielle) ---
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")  # Options: deepseek-chat, deepseek-reasoner

@@ -28,13 +28,13 @@ def get_max_journee_in_db() -> int:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT MAX(m.journee)
+                SELECT MAX(m.journee) as max
                 FROM matches m
                 JOIN sessions s ON s.id = m.session_id
                 WHERE s.status = 'ACTIVE'
             """)
-            result = cursor.fetchone()[0]
-            return result if result else 0
+            result = cursor.fetchone()
+            return result['max'] if result and result['max'] else 0
     except Exception as e:
         logger.error(f"Erreur lors de la recuperation de la journee max : {e}")
         return 0
