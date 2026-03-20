@@ -1,82 +1,141 @@
 from . import analyzers
+import logging
+
+logger = logging.getLogger(__name__)
 
 def calculer_score_prisma(data):
-
+    """
+    Scoring PRISMA classique (logiciel métier original).
+    """
     # Convertir les points en nombres si ce sont des chaînes
-
-    pts_dom = float(data['pts_dom']) if isinstance(data['pts_dom'], str) else data['pts_dom']
-
-    pts_ext = float(data['pts_ext']) if isinstance(data['pts_ext'], str) else data['pts_ext']
-
-    
+    pts_dom = float(data["pts_dom"]) if isinstance(data["pts_dom"], str) else data["pts_dom"]
+    pts_ext = float(data["pts_ext"]) if isinstance(data["pts_ext"], str) else data["pts_ext"]
 
     score_classement = (pts_dom - pts_ext) * 0.4
-
-    f_dom_score = analyzers.pondere_forme_prisma(data['forme_dom'])
-
-    f_ext_score = analyzers.pondere_forme_prisma(data['forme_ext'])
-
+    
+    forme_dom_str = data.get("forme_dom", "")
+    forme_ext_str = data.get("forme_ext", "")
+    
+    f_dom_score = analyzers.pondere_forme_prisma(forme_dom_str)
+    f_ext_score = analyzers.pondere_forme_prisma(forme_ext_str)
     score_forme = (f_dom_score - f_ext_score) * 0.3
 
     score_buts = 0
-
-    if all(k in data for k in ['bp_dom', 'bc_dom', 'bp_ext', 'bc_ext']):
-
-        diff_attaque = (data['bp_dom'] - data['bp_ext']) * 0.1
-
-        diff_defense = (data['bc_ext'] - data['bc_dom']) * 0.1
-
+    if all(k in data for k in ["bp_dom", "bc_dom", "bp_ext", "bc_ext"]):
+        diff_attaque = (data["bp_dom"] - data["bp_ext"]) * 0.1
+        diff_defense = (data["bc_ext"] - data["bc_dom"]) * 0.1
         score_buts = (diff_attaque + diff_defense) * 0.15
 
     avantage_domicile = 2.0
-
     score_base = score_classement + score_forme + score_buts + avantage_domicile
 
-    if analyzers.detecter_instabilite_prisma(data['forme_dom']) or analyzers.detecter_instabilite_prisma(data['forme_ext']):
-
+    # Vérification des rejets
+    if analyzers.detecter_instabilite_prisma(forme_dom_str) or \
+       analyzers.detecter_instabilite_prisma(forme_ext_str):
         return None, "REJET_INSTABILITE"
 
-    if analyzers.detecter_match_equilibre_prisma(data['cote_1'], data['cote_x'], data['cote_2']):
-
+    if analyzers.detecter_match_equilibre_prisma(data.get("cote_1"), data.get("cote_x"), data.get("cote_2")):
         return None, "REJET_EQUILIBRE"
 
-    bonus_cotes = analyzers.analyser_cotes_suspectes_prisma(data['cote_1'], data['cote_x'], data['cote_2'])
-
+    bonus_cotes = analyzers.analyser_cotes_suspectes_prisma(data.get("cote_1"), data.get("cote_x"), data.get("cote_2"))
     if bonus_cotes <= -3.0:
-
         return None, "REJET_PIEGE_COTES"
 
-    bonus_h2h = data.get('bonus_h2h', 0)
-
+    bonus_h2h = data.get("bonus_h2h", 0)
     if bonus_h2h <= -2.5:
-
         return None, "REJET_H2H_DEFAVORABLE"
 
-    momentum_dom = analyzers.calculer_momentum_prisma(data['forme_dom'])
-
-    momentum_ext = analyzers.calculer_momentum_prisma(data['forme_ext'])
-
+    momentum_dom = analyzers.calculer_momentum_prisma(forme_dom_str)
+    momentum_ext = analyzers.calculer_momentum_prisma(forme_ext_str)
     bonus_momentum = (momentum_dom - momentum_ext) * 0.5
 
     score_final = score_base + bonus_h2h + bonus_cotes + bonus_momentum
 
     SEUIL_VICTOIRE = 7.0
-
     SEUIL_NUL_MAX = 3.0
-
     SEUIL_NUL_MIN = -3.0
 
     if score_final > SEUIL_VICTOIRE:
-
         return "1", score_final
-
     elif score_final < -SEUIL_VICTOIRE:
-
         return "2", abs(score_final)
-
     elif SEUIL_NUL_MIN <= score_final <= SEUIL_NUL_MAX:
-
         return "X", abs(score_final)
 
     return None, "ZONE_INCERTITUDE"
 
+
+def calculer_score_prisma_v2(data, conn=None):
+    """
+    Version hybride : PRISMA classique + Ensemble ML (XGBoost + CatBoost).
+    L'Ensemble est utilisé si activé par l'utilisateur dans l'interface.
+    """
+    from ..core import config
+    
+    # 1. Obtenir le résultat classique pour les filtres de rejet et le fallback
+    classic_res, classic_score = calculer_score_prisma(data)
+    
+    # Si rejet strict par le métier, on s'arrête là (sécurité bankroll)
+    if classic_res is None and str(classic_score).startswith("REJET"):
+        return None, classic_score, {}
+
+    # 2. Vérifier si l'Ensemble ML est activé (dynamiquement via DB)
+    ensemble_enabled = getattr(config, 'PRISMA_XGBOOST_ENABLED', False)
+    try:
+        from src.core.database import get_db_connection
+        # On utilise une connexion temporaire ou celle passée en paramètre
+        with get_db_connection() as conn_check:
+            with conn_check.cursor() as cur:
+                cur.execute("SELECT value_int FROM prisma_config WHERE key = 'ensemble_enabled'")
+                row = cur.fetchone()
+                if row:
+                    ensemble_enabled = bool(row["value_int"])
+    except Exception as e:
+        logger.warning(f"[ENGINE] Erreur check ensemble toggle: {e}")
+
+    # 3. Tentative de prédiction via Ensemble ML
+    if ensemble_enabled:
+        try:
+            from . import ensemble
+            ml_result = ensemble.predict_ensemble(data)
+            if ml_result:
+                # --- Phase: Validation Poisson (Nouveau) ---
+                poisson_enabled = getattr(config, 'PRISMA_POISSON_ENABLED', False)
+                if poisson_enabled:
+                    try:
+                        from . import poisson
+                        from src.core.session_manager import get_active_session
+                        session = get_active_session(conn_check)
+                        if session:
+                            p_res = poisson.predict_score_probs(
+                                data['equipe_dom_id'], 
+                                data['equipe_ext_id'], 
+                                conn_check, 
+                                session['id']
+                            )
+                            if p_res:
+                                ml_pred = ml_result['prediction']
+                                poi_probs = p_res['probabilities']
+                                poi_pred = max(poi_probs, key=poi_probs.get)
+                                
+                                logger.info(f"[POISSON] Pred: {p_res['most_likely_score']} ({poi_pred}) | λ {p_res['lambda_home']:.2f}-{p_res['lambda_away']:.2f}")
+                                
+                                # Stockage pour info bulles UI plus tard
+                                ml_result['poisson_score'] = p_res['most_likely_score']
+                                ml_result['poisson_probs'] = poi_probs
+                                
+                                # Logique de validation simple : boost si accord
+                                if ml_pred == poi_pred:
+                                    # Boost léger de confiance si les deux modèles sont d'accord
+                                    ml_result['confidence'] = min(1.0, ml_result['confidence'] * 1.1)
+                                    ml_result['source'] = f"{ml_result.get('source', 'ML')}+Poisson"
+                    except Exception as p_err:
+                        logger.warning(f"[ENGINE] Erreur Poisson validation: {p_err}")
+
+                # Retourner le résultat ML (éventuellement boosté par Poisson)
+                return ml_result['prediction'], ml_result['confidence'], ml_result
+        except Exception as ml_err:
+            logger.error(f"[ENGINE] Erreur Ensemble ML: {ml_err}")
+
+    # 4. Fallback vers PRISMA classique si ML désactivé ou échec
+    return classic_res, classic_score, {}

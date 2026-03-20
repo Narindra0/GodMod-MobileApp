@@ -1,12 +1,8 @@
-from typing import Tuple, Optional
+from typing import Optional, Tuple
 
 
 def calculer_recompense(
-    mise: int,
-    cote: Optional[float],
-    resultat: Optional[bool],
-    capital_actuel: int,
-    score_zeus: int
+    mise: int, cote: Optional[float], resultat: Optional[bool], capital_actuel: int, score_zeus: int
 ) -> Tuple[float, int]:
     """
     Reward ZEUS v2 :
@@ -37,17 +33,15 @@ def calculer_recompense(
             reward -= 10.0
 
         return reward, nouveau_score
-def determiner_resultat(
-    type_pari: str,
-    score_dom: int,
-    score_ext: int
-) -> bool:
-    if type_pari == 'Aucun':
+
+
+def determiner_resultat(type_pari: str, score_dom: int, score_ext: int) -> bool:
+    if type_pari == "Aucun":
         return False
     if score_dom > score_ext:
-        issue = '1'
+        issue = "1"
     elif score_dom < score_ext:
-        issue = '2'
+        issue = "2"
     else:
-        issue = 'N'
+        issue = "N"
     return type_pari == issue

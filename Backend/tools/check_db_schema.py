@@ -1,9 +1,10 @@
-import sqlite3
 import os
+import sqlite3
 
 try:
     # Exécution attendue depuis le dossier Backend/
     from src.core import config
+
     _default_db_path = config.DB_NAME
 except Exception:
     # Fallback minimal si le module n'est pas importable

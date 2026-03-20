@@ -1,8 +1,12 @@
 import os
 import shutil
-from typing import Dict, List
+from typing import Dict
+
 import numpy as np
-from ..utils.metrics import generer_rapport_performance
+
+from ..utils.metrics import PerformanceInput, generer_rapport_performance
+
+
 def evaluer_robustesse(model, env, n_episodes: int = 5) -> Dict:
     all_rois = []
     all_win_rates = []
@@ -16,33 +20,39 @@ def evaluer_robustesse(model, env, n_episodes: int = 5) -> Dict:
             obs, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
         rapport = generer_rapport_performance(
-            capital_initial=env.capital_initial,
-            capital_final=env.capital,
-            capital_history=env.historique_capital,
-            total_matches=len(env.historique_capital) - 1,
-            total_paris=env.total_paris,
-            paris_gagnants=env.paris_gagnants
+            PerformanceInput(
+                capital_initial=env.capital_initial,
+                capital_final=env.capital,
+                capital_history=env.historique_capital,
+                total_matches=len(env.historique_capital) - 1,
+                total_paris=env.total_paris,
+                paris_gagnants=env.paris_gagnants,
+            )
         )
-        all_rois.append(rapport['roi_percent'])
-        all_win_rates.append(rapport['win_rate_percent'])
-        all_drawdowns.append(rapport['max_drawdown_percent'])
+        all_rois.append(rapport["roi_percent"])
+        all_win_rates.append(rapport["win_rate_percent"])
+        all_drawdowns.append(rapport["max_drawdown_percent"])
         if env.capital >= 1000:
             survival_count += 1
     return {
-        'avg_roi': np.mean(all_rois),
-        'std_roi': np.std(all_rois),
-        'avg_win_rate': np.mean(all_win_rates),
-        'avg_max_drawdown': np.mean(all_drawdowns),
-        'survival_rate': survival_count / n_episodes
+        "avg_roi": np.mean(all_rois),
+        "std_roi": np.std(all_rois),
+        "avg_win_rate": np.mean(all_win_rates),
+        "avg_max_drawdown": np.mean(all_drawdowns),
+        "survival_rate": survival_count / n_episodes,
     }
+
+
 def doit_promouvoir(new_metrics: Dict, old_metrics: Dict) -> bool:
-    if new_metrics['survival_rate'] < old_metrics['survival_rate']:
+    if new_metrics["survival_rate"] < old_metrics["survival_rate"]:
         return False
-    if new_metrics['avg_roi'] > old_metrics['avg_roi'] and new_metrics['std_roi'] <= old_metrics['std_roi']:
+    if new_metrics["avg_roi"] > old_metrics["avg_roi"] and new_metrics["std_roi"] <= old_metrics["std_roi"]:
         return True
-    if new_metrics['survival_rate'] == 1.0 and old_metrics['survival_rate'] < 1.0:
+    if new_metrics["survival_rate"] == 1.0 and old_metrics["survival_rate"] < 1.0:
         return True
     return False
+
+
 def deployer_modele(model_source_path: str, model_dest_dir: str = "./models/zeus/best/"):
     os.makedirs(model_dest_dir, exist_ok=True)
     dest_path = os.path.join(model_dest_dir, "best_model.zip")

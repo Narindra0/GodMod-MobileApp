@@ -1,7 +1,11 @@
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from src.core import database
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+
 def main():
     print("=" * 60)
     print("🏛️  ZEUS - Migration de la base de données")
@@ -12,5 +16,7 @@ def main():
     database.initialiser_db()
     print("\n✅ Migration terminée avec succès!")
     print("=" * 60)
+
+
 if __name__ == "__main__":
     main()

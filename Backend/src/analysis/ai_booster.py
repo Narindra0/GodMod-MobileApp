@@ -1,8 +1,9 @@
-import logging
 import json
-import time
+import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import List, Dict, Any
+from typing import Any, Dict, List
+import time
 from ..core import config
 
 logger = logging.getLogger(__name__)
@@ -15,17 +16,29 @@ _BOOST_FALLBACK = 0.0
 # Intervalle minimum entre deux appels Groq (secondes)
 _RATE_LIMIT_SECONDS = 60
 
-_SYSTEM_PROMPT = """Tu es un expert en football virtuel. Analyse les statistiques fournies.
-Retourne UNIQUEMENT un objet JSON au format : {"matches": [{"match": "Equipe A vs Equipe B", "boost": <float -5.0 à 5.0>, "raison": "<texte court>"}]}
-Si boost > 0 : avantage domicile. Si boost < 0 : avantage extérieur."""
+_SYSTEM_PROMPT = (
+    "Tu es un expert en football virtuel. Analyse les statistiques fournies.\n"
+    "Retourne UNIQUEMENT un objet JSON au format : "
+    '{"matches": [{"match": "Equipe A vs Equipe B", "boost": <float -5.0 à 5.0>, "raison": "<texte court>"}]}\n'
+    "Si boost > 0 : avantage domicile. Si boost < 0 : avantage extérieur."
+)
+
+
+@dataclass(frozen=True)
+class BoostBatchContext:
+    batch: List[Dict[str, Any]]
+    match_map: Dict[str, Dict[str, Any]]
+    session_id: int
+    journee: int
+    conn: Any
 
 
 def _decode_forme(forme: str | None) -> str:
     """Convertit une chaîne de forme (ex: 'VVNDV') en texte lisible."""
     if not forme:
         return "Aucun historique"
-    mapping = {'V': 'Victoire', 'N': 'Nul', 'D': 'Défaite'}
-    return ' → '.join(mapping.get(c, '?') for c in list(forme)[-10:])
+    mapping = {"V": "Victoire", "N": "Nul", "D": "Défaite"}
+    return " → ".join(mapping.get(c, "?") for c in list(forme)[-10:])
 
 
 def _build_batch_prompt(matches: List[Dict[str, Any]]) -> str:
@@ -52,19 +65,21 @@ def _is_rate_limited(session_id: int, journee: int, conn) -> bool:
         cursor = conn.cursor()
         cursor.execute(
             "SELECT MAX(timestamp) as max_ts FROM groq_boosts WHERE session_id = %s AND journee = %s",
-            (session_id, journee)
+            (session_id, journee),
         )
         row = cursor.fetchone()
         if row:
             # Gérer RealDictRow (dict) ou tuple standard
-            last_ts = row['max_ts'] if isinstance(row, dict) else row[0]
+            last_ts = row["max_ts"] if isinstance(row, dict) else row[0]
             if last_ts:
                 if last_ts.tzinfo is None:
                     last_ts = last_ts.replace(tzinfo=timezone.utc)
                 now = datetime.now(timezone.utc)
                 delta = (now - last_ts).total_seconds()
                 if delta < _RATE_LIMIT_SECONDS:
-                    logger.info(f"[GROQ] Rate limit actif : dernier appel il y a {delta:.0f}s (< {_RATE_LIMIT_SECONDS}s). Skip.")
+                    logger.info(
+                        f"[GROQ] Rate limit actif : dernier appel il y a {delta:.0f}s (< {_RATE_LIMIT_SECONDS}s). Skip."
+                    )
                     return True
     except Exception as e:
         logger.warning(f"[GROQ] Erreur vérification rate limit: {e}")
@@ -77,11 +92,12 @@ def _cache_exists(session_id: int, journee: int, conn) -> bool:
         cursor = conn.cursor()
         cursor.execute(
             "SELECT COUNT(*) as count_val FROM groq_boosts WHERE session_id = %s AND journee = %s",
-            (session_id, journee)
+            (session_id, journee),
         )
         row = cursor.fetchone()
-        if not row: return False
-        count = row['count_val'] if isinstance(row, dict) else row[0]
+        if not row:
+            return False
+        count = row["count_val"] if isinstance(row, dict) else row[0]
         return count > 0
     except Exception as e:
         logger.warning(f"[GROQ] Erreur vérification cache: {e}")
@@ -108,7 +124,7 @@ def _store_boosts(session_id: int, journee: int, boosts: List[Dict], match_map: 
             ON CONFLICT (session_id, journee, equipe_dom_id, equipe_ext_id)
             DO UPDATE SET boost = EXCLUDED.boost, raison = EXCLUDED.raison, timestamp = CURRENT_TIMESTAMP
             """,
-            (session_id, journee, match_info["equipe_dom_id"], match_info["equipe_ext_id"], boost, raison)
+            (session_id, journee, match_info["equipe_dom_id"], match_info["equipe_ext_id"], boost, raison),
         )
         stored += 1
         logger.info(f"[GROQ] {match_key} → Boost={boost:+.1f} | {raison}")
@@ -123,7 +139,7 @@ def analyze_and_store_journee(journee: int, session_id: int, conn) -> bool:
     Retourne True si l'appel a été effectué, False sinon (cache hit, rate limit, erreur).
     """
     # Utilisation de Google Gemini (gemini-1.5-flash)
-    api_key = getattr(config, 'GEMINI_API_KEY', None)
+    api_key = getattr(config, "GEMINI_API_KEY", None)
     if not api_key:
         logger.warning("[AI-BOOSTER] GEMINI_API_KEY manquante ou vide dans config/env.")
         return False
@@ -141,7 +157,8 @@ def analyze_and_store_journee(journee: int, session_id: int, conn) -> bool:
         cursor = conn.cursor()
 
         # Récupérer tous les matchs + données nécessaires pour la journée
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT m.id, m.equipe_dom_id, m.equipe_ext_id,
                    e1.nom as nom_dom, e2.nom as nom_ext,
                    m.cote_1, m.cote_x, m.cote_2,
@@ -163,7 +180,9 @@ def analyze_and_store_journee(journee: int, session_id: int, conn) -> bool:
                 ORDER BY equipe_id, journee DESC
             ) c2 ON c2.equipe_id = m.equipe_ext_id
             WHERE m.session_id = %s AND m.journee = %s
-        """, (session_id, session_id, session_id, journee))
+        """,
+            (session_id, session_id, session_id, journee),
+        )
         rows = cursor.fetchall()
 
         if not rows:
@@ -171,38 +190,43 @@ def analyze_and_store_journee(journee: int, session_id: int, conn) -> bool:
             return False
 
         # Récupérer les prédictions PRISMA déjà calculées (si disponibles)
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT p.match_id, p.prediction, p.fiabilite
             FROM predictions p
             WHERE p.session_id = %s
               AND p.match_id IN (SELECT id FROM matches WHERE session_id = %s AND journee = %s)
-        """, (session_id, session_id, journee))
-        predictions_map = {r['match_id']: r for r in cursor.fetchall()}
+        """,
+            (session_id, session_id, journee),
+        )
+        predictions_map = {r["match_id"]: r for r in cursor.fetchall()}
 
         # Construire la liste de matchs pour le prompt
         matches_data = []
         match_map = {}  # clé "Dom vs Ext" → ids
         for row in rows:
-            nom_dom = row['nom_dom']
-            nom_ext = row['nom_ext']
+            nom_dom = row["nom_dom"]
+            nom_ext = row["nom_ext"]
             match_key = f"{nom_dom} vs {nom_ext}"
-            pred_info = predictions_map.get(row['id'], {})
-            matches_data.append({
-                "nom_dom": nom_dom,
-                "nom_ext": nom_ext,
-                "pts_dom": row['pts_dom'] or 0,
-                "pts_ext": row['pts_ext'] or 0,
-                "forme_dom": row['forme_dom'] or "",
-                "forme_ext": row['forme_ext'] or "",
-                "cote_1": row['cote_1'] or "?",
-                "cote_x": row['cote_x'] or "?",
-                "cote_2": row['cote_2'] or "?",
-                "prisma_score": float(pred_info.get('fiabilite') or 0.0),
-                "prediction": pred_info.get('prediction') or "?",
-            })
+            pred_info = predictions_map.get(row["id"], {})
+            matches_data.append(
+                {
+                    "nom_dom": nom_dom,
+                    "nom_ext": nom_ext,
+                    "pts_dom": row["pts_dom"] or 0,
+                    "pts_ext": row["pts_ext"] or 0,
+                    "forme_dom": row["forme_dom"] or "",
+                    "forme_ext": row["forme_ext"] or "",
+                    "cote_1": row["cote_1"] or "?",
+                    "cote_x": row["cote_x"] or "?",
+                    "cote_2": row["cote_2"] or "?",
+                    "prisma_score": float(pred_info.get("fiabilite") or 0.0),
+                    "prediction": pred_info.get("prediction") or "?",
+                }
+            )
             match_map[match_key] = {
-                "equipe_dom_id": row['equipe_dom_id'],
-                "equipe_ext_id": row['equipe_ext_id'],
+                "equipe_dom_id": row["equipe_dom_id"],
+                "equipe_ext_id": row["equipe_ext_id"],
             }
 
         # Détection Alternance Ternaire (%)
@@ -210,44 +234,57 @@ def analyze_and_store_journee(journee: int, session_id: int, conn) -> bool:
         # J%3 == 2: Groq (P), DeepSeek (S1), Gemini (S2)
         # J%3 == 0: DeepSeek (P), Gemini (S1), Groq (S2)
         cycle_idx = journee % 3
-        
+
         # Définition de l'ordre des IAs
         if cycle_idx == 1:
             ia_order = ["GEMINI", "GROQ", "DEEPSEEK"]
         elif cycle_idx == 2:
             ia_order = ["GROQ", "DEEPSEEK", "GEMINI"]
-        else: # cycle_idx == 0
+        else:  # cycle_idx == 0
             ia_order = ["DEEPSEEK", "GEMINI", "GROQ"]
-            
+
         logger.info(f"[AI-BOOSTER] J{journee} Cycle {cycle_idx} : Ordre IA = {' -> '.join(ia_order)}")
-        
+
         # Initialisation Gemini
         from google import genai
+
         gemini_client = genai.Client(api_key=api_key)
-        gemini_model = getattr(config, 'GEMINI_MODEL', 'gemini-1.5-flash')
-        
+        gemini_model = getattr(config, "GEMINI_MODEL", "gemini-1.5-flash")
+
         # Micro-batching : 5 matchs par appel pour la stabilité
         MICRO_BATCH_SIZE = 5
         for i in range(0, len(matches_data), MICRO_BATCH_SIZE):
-            batch = matches_data[i:i + MICRO_BATCH_SIZE]
+            batch = matches_data[i : i + MICRO_BATCH_SIZE]
+            batch_ctx = BoostBatchContext(
+                batch=batch,
+                match_map=match_map,
+                session_id=session_id,
+                journee=journee,
+                conn=conn,
+            )
             success = False
-            
+
             # --- LOGIQUE DE ROTATION ---
             for ia_name in ia_order:
                 if ia_name == "GEMINI":
-                    success = _analyze_with_gemini(gemini_client, gemini_model, batch, match_map, session_id, journee, conn)
+                    success = _analyze_with_gemini(gemini_client, gemini_model, batch_ctx)
                 elif ia_name == "GROQ":
-                    success = _analyze_with_groq(batch, match_map, session_id, journee, conn)
+                    success = _analyze_with_groq(batch_ctx)
                 elif ia_name == "DEEPSEEK":
-                    success = _analyze_with_deepseek(batch, match_map, session_id, journee, conn)
-                
+                    success = _analyze_with_deepseek(batch_ctx)
+
                 if success:
                     break
                 else:
-                    logger.info(f"[AI-BOOSTER] {ia_name} a echoue sur batch {i//MICRO_BATCH_SIZE + 1}. Tentative sur l'IA suivante...")
-            
+                    logger.info(
+                        f"[AI-BOOSTER] {ia_name} a echoue sur batch "
+                        f"{i//MICRO_BATCH_SIZE + 1}. Tentative sur l'IA suivante..."
+                    )
+
             if not success:
-                logger.warning(f"[AI-BOOSTER] ECHEC CRITIQUE : Aucune des 3 IAs n'a pu traiter le batch {i//MICRO_BATCH_SIZE + 1}.")
+                logger.warning(
+                    f"[AI-BOOSTER] ECHEC CRITIQUE : Aucune des 3 IAs n'a pu traiter le batch {i//MICRO_BATCH_SIZE + 1}."
+                )
 
         return True
 
@@ -259,24 +296,23 @@ def analyze_and_store_journee(journee: int, session_id: int, conn) -> bool:
         return False
 
 
-def _analyze_with_gemini(client, model_name, batch, match_map, session_id, journee, conn) -> bool:
+def _analyze_with_gemini(client, model_name, batch_ctx: BoostBatchContext) -> bool:
     """Analyse un micro-batch via Gemini avec gestion de retry."""
-    import time
     MAX_RETRIES = 3
     retry_count = 0
-    prompt = _build_batch_prompt(batch)
-    
+    prompt = _build_batch_prompt(batch_ctx.batch)
+
     while retry_count < MAX_RETRIES:
         try:
             response = client.models.generate_content(
                 model=model_name,
                 contents=f"{_SYSTEM_PROMPT}\n\nDonnées :\n{prompt}",
-                config={'response_mime_type': 'application/json', 'temperature': 0.1}
+                config={"response_mime_type": "application/json", "temperature": 0.1},
             )
             parsed = json.loads(response.text)
             boosts_list = parsed.get("matches", parsed.get("results", list(parsed.values())[0] if parsed else []))
             if isinstance(boosts_list, list):
-                _store_boosts(session_id, journee, boosts_list, match_map, conn)
+                _store_boosts(batch_ctx.session_id, batch_ctx.journee, boosts_list, batch_ctx.match_map, batch_ctx.conn)
                 return True
             return False
         except Exception as e:
@@ -291,84 +327,77 @@ def _analyze_with_gemini(client, model_name, batch, match_map, session_id, journ
     return False
 
 
-def _analyze_with_groq(batch: List[Dict], match_map: Dict, session_id: int, journee: int, conn) -> bool:
+def _analyze_with_groq(batch_ctx: BoostBatchContext) -> bool:
     """Fonction de secours utilisant l'API Groq (Llama-3.1-8b)."""
-    api_key = getattr(config, 'GROQ_API_KEY', None)
+    api_key = getattr(config, "GROQ_API_KEY", None)
     if not api_key:
         logger.warning("[AI-BOOSTER] GROQ_API_KEY manquante pour le fallback.")
         return False
-        
+
     try:
         from groq import Groq
+
         client = Groq(api_key=api_key)
-        model = getattr(config, 'GROQ_MODEL', 'llama-3.1-8b-instant')
-        
-        prompt = _build_batch_prompt(batch)
+        model = getattr(config, "GROQ_MODEL", "llama-3.1-8b-instant")
+
+        prompt = _build_batch_prompt(batch_ctx.batch)
         completion = client.chat.completions.create(
             model=model,
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": prompt}
-            ],
+            messages=[{"role": "system", "content": _SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
             temperature=0.1,
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
         )
-        
+
         content = completion.choices[0].message.content
         parsed = json.loads(content)
         boosts_list = parsed.get("matches", [])
-        
+
         if boosts_list:
-            _store_boosts(session_id, journee, boosts_list, match_map, conn)
+            _store_boosts(batch_ctx.session_id, batch_ctx.journee, boosts_list, batch_ctx.match_map, batch_ctx.conn)
             return True
-            
+
     except Exception as e:
         logger.error(f"[AI-BOOSTER] Echec du fallback GROQ : {e}")
-        
+
     return False
 
 
-def _analyze_with_deepseek(batch: List[Dict], match_map: Dict, session_id: int, journee: int, conn) -> bool:
+def _analyze_with_deepseek(batch_ctx: BoostBatchContext) -> bool:
     """Analyse via l'API officielle DeepSeek."""
-    api_key = getattr(config, 'DEEPSEEK_API_KEY', None)
+    api_key = getattr(config, "DEEPSEEK_API_KEY", None)
     if not api_key:
         logger.warning("[AI-BOOSTER] DEEPSEEK_API_KEY manquante.")
         return False
-        
+
     try:
         from openai import OpenAI
-        client = OpenAI(
-            base_url=config.DEEPSEEK_BASE_URL,
-            api_key=api_key
-        )
+
+        client = OpenAI(base_url=config.DEEPSEEK_BASE_URL, api_key=api_key)
         model = config.DEEPSEEK_MODEL
-        
-        prompt = _build_batch_prompt(batch)
+
+        prompt = _build_batch_prompt(batch_ctx.batch)
         completion = client.chat.completions.create(
             model=model,
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": prompt}
-            ],
+            messages=[{"role": "system", "content": _SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
             temperature=0.1,
-            response_format={"type": "json_object"} if "reasoner" not in model else None
+            response_format={"type": "json_object"} if "reasoner" not in model else None,
         )
-        
+
         content = completion.choices[0].message.content
         # Nettoyage si DeepSeek renvoie du markdown
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
-            
+
         parsed = json.loads(content)
         boosts_list = parsed.get("matches", parsed.get("results", []))
-        
+
         if boosts_list:
-            _store_boosts(session_id, journee, boosts_list, match_map, conn)
+            _store_boosts(batch_ctx.session_id, batch_ctx.journee, boosts_list, batch_ctx.match_map, batch_ctx.conn)
             return True
-            
+
     except Exception as e:
         logger.error(f"[AI-BOOSTER] Echec DEEPSEEK Officiel : {e}")
-        
+
     return False
 
 
@@ -385,10 +414,10 @@ def get_cached_boost(session_id: int, journee: int, equipe_dom_id: int, equipe_e
             WHERE session_id = %s AND journee = %s
               AND equipe_dom_id = %s AND equipe_ext_id = %s
             """,
-            (session_id, journee, equipe_dom_id, equipe_ext_id)
+            (session_id, journee, equipe_dom_id, equipe_ext_id),
         )
         row = cursor.fetchone()
-        return float(row['boost']) if row else _BOOST_FALLBACK
+        return float(row["boost"]) if row else _BOOST_FALLBACK
     except Exception as e:
         logger.warning(f"[GROQ] Erreur lecture cache boost: {e}")
         return _BOOST_FALLBACK

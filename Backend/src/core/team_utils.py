@@ -1,5 +1,6 @@
 from .database import get_db_connection
 
+
 def get_equipe_logo(equipe_id=None, equipe_nom=None):
     try:
         with get_db_connection() as conn:
@@ -11,10 +12,11 @@ def get_equipe_logo(equipe_id=None, equipe_nom=None):
             else:
                 return None
             result = cursor.fetchone()
-            return result['logo_url'] if result and result['logo_url'] else None
+            return result["logo_url"] if result and result["logo_url"] else None
     except Exception as e:
         print(f"Erreur lors de la récupération du logo: {e}")
         return None
+
 
 def get_toutes_les_equipes_avec_logos():
     try:
@@ -23,15 +25,12 @@ def get_toutes_les_equipes_avec_logos():
             cursor.execute("SELECT id, nom, logo_url FROM equipes ORDER BY nom")
             equipes = []
             for row in cursor.fetchall():
-                equipes.append({
-                    'id': row['id'],
-                    'nom': row['nom'],
-                    'logo_url': row['logo_url']
-                })
+                equipes.append({"id": row["id"], "nom": row["nom"], "logo_url": row["logo_url"]})
             return equipes
     except Exception as e:
         print(f"Erreur lors de la récupération des équipes: {e}")
         return []
+
 
 def get_match_with_logos(match_id):
     try:
@@ -50,21 +49,13 @@ def get_match_with_logos(match_id):
             row = cursor.fetchone()
             if row:
                 return {
-                    'id': row['id'],
-                    'journee': row['journee'],
-                    'score_dom': row['score_dom'],
-                    'score_ext': row['score_ext'],
-                    'status': row['status'],
-                    'equipe_dom': {
-                        'id': row['dom_id'],
-                        'nom': row['dom_nom'],
-                        'logo_url': row['dom_logo']
-                    },
-                    'equipe_ext': {
-                        'id': row['ext_id'],
-                        'nom': row['ext_nom'],
-                        'logo_url': row['ext_logo']
-                    }
+                    "id": row["id"],
+                    "journee": row["journee"],
+                    "score_dom": row["score_dom"],
+                    "score_ext": row["score_ext"],
+                    "status": row["status"],
+                    "equipe_dom": {"id": row["dom_id"], "nom": row["dom_nom"], "logo_url": row["dom_logo"]},
+                    "equipe_ext": {"id": row["ext_id"], "nom": row["ext_nom"], "logo_url": row["ext_logo"]},
                 }
             return None
     except Exception as e:

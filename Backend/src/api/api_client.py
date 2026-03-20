@@ -1,7 +1,8 @@
 import time
-import json
+from typing import Dict, List
+
 import requests
-from typing import List, Dict
+
 HEADERS = {
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "fr",
@@ -11,32 +12,38 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Sec-Fetch-Dest": "empty",
     "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "cross-site"
+    "Sec-Fetch-Site": "cross-site",
 }
 BASE_URL = "https://hg-event-api-prod.sporty-tech.net/api"
 LEAGUE_ID = 8035
+
+
 def _get_with_retry(url: str, *, params: Dict = None, timeout: int = 15, max_attempts: int = 3) -> requests.Response:
     for attempt in range(max_attempts):
         try:
             resp = requests.get(url, headers=HEADERS, params=params, timeout=timeout)
             return resp
-        except requests.exceptions.RequestException as e:
+        except requests.exceptions.RequestException:
             if attempt == max_attempts - 1:
                 raise
-            time.sleep(2 ** attempt)
+            time.sleep(2**attempt)
+
+
 def get_ranking(league_id: int = LEAGUE_ID) -> List[Dict]:
     url = f"{BASE_URL}/instantleagues/{league_id}/ranking"
     try:
         response = _get_with_retry(url, timeout=15)
         if response.status_code in [502, 503, 504]:
             return []
-        response.raise_for_status() 
+        response.raise_for_status()
         data = response.json()
         return data.get("teams", [])
     except requests.exceptions.Timeout:
         return []
-    except requests.exceptions.RequestException as e:
+    except requests.exceptions.RequestException:
         return []
+
+
 def get_recent_results(league_id: int = LEAGUE_ID, skip: int = 0, take: int = 5) -> Dict:
     url = f"{BASE_URL}/instantleagues/{league_id}/results"
     params = {"skip": skip, "take": take}
@@ -46,8 +53,10 @@ def get_recent_results(league_id: int = LEAGUE_ID, skip: int = 0, take: int = 5)
             return {"rounds": []}
         response.raise_for_status()
         return response.json()
-    except requests.exceptions.RequestException as e:
+    except requests.exceptions.RequestException:
         return {"rounds": []}
+
+
 def get_upcoming_matches(league_id: int = LEAGUE_ID) -> Dict:
     url = f"{BASE_URL}/instantleagues/{league_id}/matches"
     try:
@@ -56,5 +65,5 @@ def get_upcoming_matches(league_id: int = LEAGUE_ID) -> Dict:
             return {"rounds": []}
         response.raise_for_status()
         return response.json()
-    except requests.exceptions.RequestException as e:
+    except requests.exceptions.RequestException:
         return {"rounds": []}

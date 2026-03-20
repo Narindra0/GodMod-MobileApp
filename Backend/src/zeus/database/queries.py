@@ -1,27 +1,53 @@
-from typing import Dict, List, Optional, Any
-import pandas as pd
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+
 from src.core.session_manager import get_active_session
+
+
+@dataclass(frozen=True)
+class PariRecord:
+    session_id: int
+    prediction_id: int
+    journee: int
+    type_pari: str
+    mise_ar: int
+    pourcentage_bankroll: float
+    cote_jouee: Optional[float]
+    resultat: Optional[int]
+    profit_net: Optional[int]
+    bankroll_apres: int
+    probabilite_implicite: Optional[float]
+    action_id: int
+    strategie: str = "ZEUS"
+
+
 def _map_match_row(row) -> Dict:
     return {
-        'id': row['id'], 'journee': row['journee'], 'equipe_dom_id': row['equipe_dom_id'],
-        'equipe_ext_id': row['equipe_ext_id'], 'equipe_dom_nom': row['equipe_dom_nom'], 'equipe_ext_nom': row['equipe_ext_nom'],
-        'cote_1': row['cote_1'], 'cote_x': row['cote_x'], 'cote_2': row['cote_2'],
-        'score_dom': row['score_dom'], 'score_ext': row['score_ext'], 'status': row['status']
+        "id": row["id"],
+        "journee": row["journee"],
+        "equipe_dom_id": row["equipe_dom_id"],
+        "equipe_ext_id": row["equipe_ext_id"],
+        "equipe_dom_nom": row["equipe_dom_nom"],
+        "equipe_ext_nom": row["equipe_ext_nom"],
+        "cote_1": row["cote_1"],
+        "cote_x": row["cote_x"],
+        "cote_2": row["cote_2"],
+        "score_dom": row["score_dom"],
+        "score_ext": row["score_ext"],
+        "status": row["status"],
     }
-def get_matches_for_journee(
-    journee: int,
-    conn: Any,
-    session_id: Optional[int] = None
-) -> List[Dict]:
+
+
+def get_matches_for_journee(journee: int, conn: Any, session_id: Optional[int] = None) -> List[Dict]:
     """
     Récupère les matches d'une journée pour une session donnée.
     Si session_id est None, on utilise la session ACTIVE (comportement historique).
     """
     if session_id is None:
         active_session = get_active_session()
-        session_id = active_session['id']
+        session_id = active_session["id"]
     query = """
-        SELECT 
+        SELECT
             mg.id,
             mg.journee,
             mg.equipe_dom_id,
@@ -44,17 +70,15 @@ def get_matches_for_journee(
     cursor.execute(query, (journee, session_id))
     rows = cursor.fetchall()
     return [_map_match_row(row) for row in rows]
-def create_session(
-    capital_initial: int,
-    type_session: str,
-    version_ia: str,
-    conn: Any
-) -> int:
+
+
+def create_session(capital_initial: int, type_session: str, version_ia: str, conn: Any) -> int:
     cursor = conn.cursor()
     cursor.execute("SELECT score_prisma FROM sessions WHERE status = 'ACTIVE' LIMIT 1")
     row = cursor.fetchone()
-    prisma_to_use = row['score_prisma'] if row else 200
-    cursor.execute("""
+    prisma_to_use = row["score_prisma"] if row else 200
+    cursor.execute(
+        """
         INSERT INTO sessions (
             capital_initial,
             type_session,
@@ -64,31 +88,22 @@ def create_session(
             status
         ) VALUES (%s, %s, %s, 0, %s, 'ACTIVE')
         RETURNING id
-    """, (capital_initial, type_session, version_ia, prisma_to_use))
-    return cursor.fetchone()['id']
+    """,
+        (capital_initial, type_session, version_ia, prisma_to_use),
+    )
+    return cursor.fetchone()["id"]
+
 
 def set_stop_loss_override(session_id: int, override: bool, conn: Any):
     cursor = conn.cursor()
     cursor.execute("UPDATE sessions SET stop_loss_override = %s WHERE id = %s", (override, session_id))
     conn.commit()
-def enregistrer_pari(
-    session_id: int,
-    prediction_id: int,
-    journee: int,
-    type_pari: str,
-    mise_ar: int,
-    pourcentage_bankroll: float,
-    cote_jouee: Optional[float],
-    resultat: Optional[int],
-    profit_net: Optional[int],
-    bankroll_apres: int,
-    probabilite_implicite: Optional[float],
-    action_id: int,
-    conn: Any,
-    strategie: str = 'ZEUS'
-) -> int:
+
+
+def enregistrer_pari(record: PariRecord, conn: Any) -> int:
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(
+        """
         INSERT INTO historique_paris (
             session_id,
             prediction_id,
@@ -105,47 +120,65 @@ def enregistrer_pari(
             strategie
         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id_pari
-    """, (
-        session_id, prediction_id, journee, type_pari, mise_ar,
-        pourcentage_bankroll, cote_jouee, resultat, profit_net,
-        bankroll_apres, probabilite_implicite, action_id, strategie
-    ))
-    return cursor.fetchone()['id_pari']
-def finaliser_session(
-    session_id: int,
-    capital_final: int,
-    profit_total: int,
-    score_zeus: int,
-    conn: Any
-):
+    """,
+        (
+            record.session_id,
+            record.prediction_id,
+            record.journee,
+            record.type_pari,
+            record.mise_ar,
+            record.pourcentage_bankroll,
+            record.cote_jouee,
+            record.resultat,
+            record.profit_net,
+            record.bankroll_apres,
+            record.probabilite_implicite,
+            record.action_id,
+            record.strategie,
+        ),
+    )
+    return cursor.fetchone()["id_pari"]
+
+
+def finaliser_session(session_id: int, capital_final: int, profit_total: int, score_zeus: int, conn: Any):
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(
+        """
         UPDATE sessions
         SET timestamp_fin = CURRENT_TIMESTAMP,
             capital_final = %s,
             profit_total = %s,
             score_zeus = %s
         WHERE id = %s
-    """, (capital_final, profit_total, score_zeus, session_id))
+    """,
+        (capital_final, profit_total, score_zeus, session_id),
+    )
     conn.commit()
+
+
 def get_available_seasons(conn: Any) -> List[int]:
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT DISTINCT journee 
-        FROM matches 
+    cursor.execute(
+        """
+        SELECT DISTINCT journee
+        FROM matches
         WHERE status = 'TERMINE'
         ORDER BY journee
-    """)
-    all_journees = [row['journee'] for row in cursor.fetchall()]
+    """
+    )
+    all_journees = [row["journee"] for row in cursor.fetchall()]
     seasons = []
     if all_journees:
         for j in all_journees:
             if (j - 1) % 38 == 0:
                 seasons.append(j)
     return seasons
+
+
 def get_last_training_metadata(conn: Any) -> Dict:
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT s.version_ia, MAX(m.journee) as max_j, s.id
         FROM sessions s
         LEFT JOIN matches m ON s.id = m.session_id
@@ -153,25 +186,34 @@ def get_last_training_metadata(conn: Any) -> Dict:
         GROUP BY s.id
         ORDER BY s.id DESC
         LIMIT 1
-    """)
+    """
+    )
     row = cursor.fetchone()
     if row:
-        return {'version': row['version_ia'], 'max_journee': row['max_j'] if row['max_j'] else 0, 'id': row['id']}
-    return {'version': 'v0', 'max_journee': 0, 'id': None}
+        return {"version": row["version_ia"], "max_journee": row["max_j"] if row["max_j"] else 0, "id": row["id"]}
+    return {"version": "v0", "max_journee": 0, "id": None}
+
+
 def get_completed_journees_count(conn: Any) -> int:
-    session_id = get_active_session()['id']
+    session_id = get_active_session()["id"]
     cursor = conn.cursor()
-    cursor.execute("SELECT MAX(journee) as max_journee FROM matches WHERE status = 'TERMINE' AND session_id = %s", (session_id,))
+    cursor.execute(
+        "SELECT MAX(journee) as max_journee FROM matches WHERE status = 'TERMINE' AND session_id = %s", (session_id,)
+    )
     row = cursor.fetchone()
-    return row['max_journee'] if row and row['max_journee'] else 0
+    return row["max_journee"] if row and row["max_journee"] else 0
+
+
 def check_new_season_available(conn: Any) -> bool:
     last_meta = get_last_training_metadata(conn)
     current_max = get_completed_journees_count(conn)
-    return (current_max - last_meta['max_journee']) >= 38
+    return (current_max - last_meta["max_journee"]) >= 38
+
+
 def valider_paris_zeus(conn: Any):
     cursor = conn.cursor()
     query = """
-        SELECT 
+        SELECT
             hp.id_pari,
             hp.prediction_id,
             hp.type_pari,
@@ -192,79 +234,99 @@ def valider_paris_zeus(conn: Any):
     # Grouper par session et stratégie pour suivre les bankrolls séparément
     batches = {}
     for p in paris_en_attente:
-        key = (p['session_id'], p.get('strategie', 'ZEUS'))
+        key = (p["session_id"], p.get("strategie", "ZEUS"))
         if key not in batches:
             batches[key] = []
         batches[key].append(p)
 
     for (sess_id, strat), p_sess in batches.items():
         # Trouver le dernier capital pour CETTE stratégie dans CETTE session
-        cursor.execute("""
-            SELECT bankroll_apres FROM historique_paris 
-            WHERE session_id = %s AND strategie = %s AND resultat IS NOT NULL 
+        cursor.execute(
+            """
+            SELECT bankroll_apres FROM historique_paris
+            WHERE session_id = %s AND strategie = %s AND resultat IS NOT NULL
             ORDER BY id_pari DESC LIMIT 1
-        """, (sess_id, strat))
+        """,
+            (sess_id, strat),
+        )
         row = cursor.fetchone()
-        
+
         if not row:
-            if strat == 'ZEUS':
+            if strat == "ZEUS":
                 cursor.execute("SELECT capital_initial FROM sessions WHERE id = %s", (sess_id,))
                 row_sess = cursor.fetchone()
-                current_bankroll = row_sess['capital_initial'] if row_sess else 20000
+                current_bankroll = row_sess["capital_initial"] if row_sess else 20000
             else:
                 from src.core.prisma_finance import get_prisma_bankroll
+
                 current_bankroll = get_prisma_bankroll()
         else:
-            current_bankroll = row['bankroll_apres']
+            current_bankroll = row["bankroll_apres"]
         for p in p_sess:
             is_win = False
-            sd, se = p['score_dom'], p['score_ext']
+            sd, se = p["score_dom"], p["score_ext"]
             if sd is None or se is None:
                 continue
-            recorded_type = p['type_pari']
+            recorded_type = p["type_pari"]
             resultat_reel = "1" if sd > se else ("2" if se > sd else "X")
-            if recorded_type == '1' and sd > se: is_win = True
-            elif recorded_type in ('X', 'N') and sd == se: is_win = True
-            elif recorded_type == '2' and se > sd: is_win = True
+            if recorded_type == "1" and sd > se:
+                is_win = True
+            elif recorded_type in ("X", "N") and sd == se:
+                is_win = True
+            elif recorded_type == "2" and se > sd:
+                is_win = True
             if is_win:
-                profit_net = int(p['mise_ar'] * (p['cote_jouee'] - 1))
+                profit_net = int(p["mise_ar"] * (p["cote_jouee"] - 1))
+                current_bankroll += int(p["mise_ar"] * p["cote_jouee"])
                 resultat_val = 1
             else:
-                profit_net = -p['mise_ar']
+                profit_net = -p["mise_ar"]
+                # current_bankroll reste inchangé car mise déjà déduite
                 resultat_val = 0
-            current_bankroll += profit_net
-            cursor.execute("""
-                UPDATE historique_paris 
+            cursor.execute(
+                """
+                UPDATE historique_paris
                 SET resultat = %s, profit_net = %s, bankroll_apres = %s
                 WHERE id_pari = %s
-            """, (resultat_val, profit_net, current_bankroll, p['id_pari']))
-            cursor.execute("""
+            """,
+                (resultat_val, profit_net, current_bankroll, p["id_pari"]),
+            )
+            cursor.execute(
+                """
                 UPDATE predictions
                 SET succes = %s, resultat = %s
                 WHERE id = %s
-            """, (resultat_val, resultat_reel, p['prediction_id']))
-            
-            if strat == 'ZEUS':
+            """,
+                (resultat_val, resultat_reel, p["prediction_id"]),
+            )
+
+            if strat == "ZEUS":
                 delta_score = 1 if is_win else -1
                 cursor.execute("UPDATE sessions SET score_zeus = score_zeus + %s WHERE id = %s", (delta_score, sess_id))
-                
+
                 # Gestion de la dette : Remboursement progressif (env. 10% par victoire)
                 if is_win and profit_net > 0:
                     cursor.execute("SELECT dette_zeus, total_emprunte_zeus FROM sessions WHERE id = %s", (sess_id,))
                     sess_row = cursor.fetchone()
-                    if sess_row and sess_row['dette_zeus'] > 0:
-                        montant_dette = sess_row['dette_zeus']
-                        total_emprunte = sess_row['total_emprunte_zeus']
-                        # On rembourse environ 10% du total emprunté à chaque victoire, plafonné par le profit et la dette restante
-                        cible_remboursement = max(int(total_emprunte * 0.1), 100) # Minimum 100 Ar pour avancer
+                    if sess_row and sess_row["dette_zeus"] > 0:
+                        montant_dette = sess_row["dette_zeus"]
+                        total_emprunte = sess_row["total_emprunte_zeus"]
+                        # On rembourse environ 10% du total emprunté à chaque victoire, 
+                        # plafonné par le profit et la dette restante
+                        cible_remboursement = max(int(total_emprunte * 0.1), 100)  # Minimum 100 Ar pour avancer
                         remboursement = min(profit_net, montant_dette, cible_remboursement)
-                        
-                        cursor.execute("UPDATE sessions SET dette_zeus = dette_zeus - %s WHERE id = %s", (remboursement, sess_id))
+
+                        cursor.execute(
+                            "UPDATE sessions SET dette_zeus = dette_zeus - %s WHERE id = %s", (remboursement, sess_id)
+                        )
                         print(f"💰 ZEUS a remboursé progressivement {remboursement} Ar de sa dette.")
             else:
                 from src.core.prisma_finance import update_prisma_bankroll
-                update_prisma_bankroll(sess_id, current_bankroll, p['mise_ar'], resultat_val, p['cote_jouee'])
+
+                update_prisma_bankroll(sess_id, current_bankroll, p["mise_ar"], resultat_val, p["cote_jouee"])
                 delta_score = 5 if is_win else -8
-                cursor.execute("UPDATE sessions SET score_prisma = score_prisma + %s WHERE id = %s", (delta_score, sess_id))
+                cursor.execute(
+                    "UPDATE sessions SET score_prisma = score_prisma + %s WHERE id = %s", (delta_score, sess_id)
+                )
     conn.commit()
     print(f"✅ {len(paris_en_attente)} paris simples validés.")

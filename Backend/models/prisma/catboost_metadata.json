@@ -1,0 +1,43 @@
+{
+  "trained_at": "2026-03-20T17:45:14.325066",
+  "training_samples": 270,
+  "feature_names": [
+    "pts_dom",
+    "pts_ext",
+    "diff_points",
+    "forme_dom",
+    "forme_ext",
+    "diff_forme",
+    "momentum_dom",
+    "momentum_ext",
+    "diff_momentum",
+    "instabilite_dom",
+    "instabilite_ext",
+    "bp_dom",
+    "bc_dom",
+    "bp_ext",
+    "bc_ext",
+    "diff_attaque",
+    "diff_defense",
+    "cote_1",
+    "cote_x",
+    "cote_2",
+    "prob_implicite_1",
+    "prob_implicite_x",
+    "prob_implicite_2",
+    "ecart_cotes",
+    "bonus_h2h",
+    "avantage_domicile",
+    "session_position",
+    "momentum5_dom",
+    "momentum5_ext",
+    "diff_momentum5",
+    "forme_raw_dom",
+    "forme_raw_ext"
+  ],
+  "label_distribution": {
+    "1": 129,
+    "X": 62,
+    "2": 79
+  }
+}

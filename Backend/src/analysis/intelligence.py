@@ -9,7 +9,7 @@ from ..core.session_manager import get_active_session
 from ..prisma import engine as prisma_engine
 from ..prisma import selection as prisma_selection
 from ..zeus.models.inference import get_zeus_model, predire_pari_zeus, formater_decision_zeus
-from ..zeus.database.queries import get_matches_for_journee, enregistrer_pari, valider_paris_zeus
+from ..zeus.database.queries import get_matches_for_journee, enregistrer_pari, valider_paris_zeus, PariRecord
 from . import multiple_bets
 from . import ai_booster
 from ..core.console import console, print_verbose
@@ -27,16 +27,19 @@ def vider_cache_intelligence():
     get_cached_active_session.cache_clear()
     analyser_confrontations_directes_cached.cache_clear()
     logger.info("Cache intelligence vidé pour synchronisation.")
+
 def _reload_config():
     if 'src.core.config' in sys.modules:
         importlib.reload(sys.modules['src.core.config'])
         globals()['config'] = sys.modules['src.core.config']
+
 def calculer_probabilite_avec_fallback(equipe_dom_id, equipe_ext_id, cote_1=None, cote_x=None, cote_2=None):
     if cote_1 is not None and cote_x is not None and cote_2 is not None:
         return calculer_probabilite_amelioree(equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2)
     else:
         logger.warning(f"Cotes manquantes pour match {equipe_dom_id} vs {equipe_ext_id}. Utilisation du calcul simple.")
         return calculer_probabilite(equipe_dom_id, equipe_ext_id)
+
 def calculer_probabilite(equipe_dom_id, equipe_ext_id, conn=None):
     if conn:
         active_session = get_active_session(conn=conn)
@@ -52,6 +55,7 @@ def calculer_probabilite(equipe_dom_id, equipe_ext_id, conn=None):
     except Exception as e:
         logger.error(f"Erreur lors du calcul de probabilité : {e}", exc_info=True)
         return None, 0
+
 def _calculer_probabilite_internal(conn, session_id, equipe_dom_id, equipe_ext_id):
     cursor = conn.cursor()
     cursor.execute("SELECT points, forme FROM classement WHERE session_id = %s AND equipe_id = %s ORDER BY journee DESC LIMIT 1", (session_id, equipe_dom_id,))
@@ -74,6 +78,7 @@ def _calculer_probabilite_internal(conn, session_id, equipe_dom_id, equipe_ext_i
         return "2", abs(score_total)
     else:
         return "X", abs(score_total)
+
 def calculer_probabilite_amelioree(equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2, conn=None):
     if conn:
         active_session = get_active_session(conn=conn)
@@ -88,7 +93,8 @@ def calculer_probabilite_amelioree(equipe_dom_id, equipe_ext_id, cote_1, cote_x,
             return _calculer_probabilite_amelioree_internal(conn, session_id, equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2)
     except Exception as e:
         logger.error(f"Erreur lors du calcul PRISMA : {e}", exc_info=True)
-        return None, 0
+        return None, 0, {}
+
 def _calculer_probabilite_amelioree_internal(conn, session_id, equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2):
     cursor = conn.cursor()
     cursor.execute("SELECT points, forme FROM classement WHERE session_id = %s AND equipe_id = %s ORDER BY journee DESC LIMIT 1", (session_id, equipe_dom_id,))
@@ -96,13 +102,15 @@ def _calculer_probabilite_amelioree_internal(conn, session_id, equipe_dom_id, eq
     cursor.execute("SELECT points, forme FROM classement WHERE session_id = %s AND equipe_id = %s ORDER BY journee DESC LIMIT 1", (session_id, equipe_ext_id,))
     stats_ext = cursor.fetchone()
     if not stats_dom or not stats_ext:
-        return None, 0
+        return None, 0, {}
     pts_dom, forme_dom = stats_dom['points'], stats_dom['forme']
     pts_ext, forme_ext = stats_ext['points'], stats_ext['forme']
     buts_dom = analyser_buts_recents_internal(cursor, session_id, equipe_id=equipe_dom_id)
     buts_ext = analyser_buts_recents_internal(cursor, session_id, equipe_id=equipe_ext_id)
     bonus_h2h = analyser_confrontations_directes(equipe_dom_id, equipe_ext_id, conn=conn)
     prisma_data = {
+        'equipe_dom_id': equipe_dom_id,
+        'equipe_ext_id': equipe_ext_id,
         'pts_dom': pts_dom, 'pts_ext': pts_ext,
         'forme_dom': forme_dom, 'forme_ext': forme_ext,
         'cote_1': cote_1, 'cote_x': cote_x, 'cote_2': cote_2,
@@ -113,10 +121,13 @@ def _calculer_probabilite_amelioree_internal(conn, session_id, equipe_dom_id, eq
             'bp_dom': buts_dom[0], 'bc_dom': buts_dom[1],
             'bp_ext': buts_ext[0], 'bc_ext': buts_ext[1]
         })
-    prediction, score = prisma_engine.calculer_score_prisma(prisma_data)
+    prediction, score, metadata = prisma_engine.calculer_score_prisma_v2(prisma_data, conn=conn)
     if prediction is None:
-        return None, 0
-    return prediction, score
+        return None, 0, {}
+    # Injecter les cotes dans metadata pour faciliter Kelly plus tard
+    metadata.update({'cote_1': cote_1, 'cote_x': cote_x, 'cote_2': cote_2})
+    return prediction, score, metadata
+
 def analyser_performances_recentes(conn=None):
     active_session = get_active_session(conn=conn)
     session_id = active_session['id']
@@ -128,6 +139,7 @@ def analyser_performances_recentes(conn=None):
     except Exception as e:
         logger.error(f"Erreur DB performances : {e}")
         return 1.0, "Erreur"
+
 def _analyser_performances_recentes_internal(conn, session_id):
     cursor = conn.cursor()
     cursor.execute("SELECT succes FROM predictions WHERE session_id = %s AND succes IS NOT NULL ORDER BY id DESC LIMIT 15", (session_id,))
@@ -135,6 +147,7 @@ def _analyser_performances_recentes_internal(conn, session_id):
     if not resultats: return 1.0, "Neutre"
     succes_count = sum(1 for r in resultats if r['succes'] == 1)
     return succes_count / len(resultats), f"{succes_count}/{len(resultats)}"
+
 def selectionner_meilleurs_matchs(journee, conn=None):
     _reload_config()
     active_session = get_active_session(conn=conn)
@@ -147,6 +160,7 @@ def selectionner_meilleurs_matchs(journee, conn=None):
     except Exception as e:
         logger.error(f"Erreur sélection standard : {e}")
         return []
+
 def _selectionner_meilleurs_matchs_internal(conn, session_id, journee):
     cursor = conn.cursor()
     cursor.execute("SELECT id, equipe_dom_id, equipe_ext_id FROM matches WHERE session_id = %s AND journee = %s", (session_id, journee))
@@ -165,6 +179,7 @@ def _selectionner_meilleurs_matchs_internal(conn, session_id, journee):
         cursor.execute("INSERT INTO predictions (session_id, match_id, prediction, fiabilite, source) VALUES (%s, %s, %s, %s, %s)",
                      (session_id, p['match_id'], p['prediction'], p['fiabilite'], 'PRISMA'))
     return predictions
+
 def selectionner_meilleurs_matchs_ameliore(journee, conn=None):
     _reload_config()
     if getattr(config, 'ZEUS_DEEP_SLEEP', False):
@@ -183,6 +198,7 @@ def selectionner_meilleurs_matchs_ameliore(journee, conn=None):
     except Exception as e:
         logger.error(f"Erreur sélection PRISMA : {e}", exc_info=True)
         return []
+
 def _selectionner_meilleurs_matchs_ameliore_internal(conn, session_id, journee):
     if is_prisma_stop_loss_active():
         print_verbose(f"   ⛔ [STOP-LOSS] Bankroll PRISMA sous {config.BANKROLL_STOP_LOSS} Ar. Aucune prédiction PRISMA générée.")
@@ -204,18 +220,21 @@ def _selectionner_meilleurs_matchs_ameliore_internal(conn, session_id, journee):
     raw_predictions = []
     for m in matchs:
         match_id, dom_id, ext_id, c1, cx, c2 = m['id'], m['equipe_dom_id'], m['equipe_ext_id'], m['cote_1'], m['cote_x'], m['cote_2']
-        pred, conf = calculer_probabilite_amelioree(dom_id, ext_id, c1, cx, c2, conn=conn)
+        pred, conf, meta = calculer_probabilite_amelioree(dom_id, ext_id, c1, cx, c2, conn=conn)
         if pred:
+            incertain_str = " ⚠️ [Match incertain]" if float(conf) < 0.45 else ""
             if ai_enabled:
                 # --- Lecture du cache Gemini (lecture seule, aucun appel API) ---
                 gemini_boost = ai_booster.get_cached_boost(session_id, journee, dom_id, ext_id, conn)
                 conf_final = float(conf) + gemini_boost
                 if gemini_boost != 0.0:
-                    print_verbose(f"   [IA] {equipes_noms.get(dom_id)} vs {equipes_noms.get(ext_id)} → Boost {gemini_boost:+.1f} | Score: {conf_final:.2f}")
+                    print_verbose(f"   [IA] {equipes_noms.get(dom_id)} vs {equipes_noms.get(ext_id)} → Boost {gemini_boost:+.1f} | Score: {conf_final:.2f}{incertain_str}")
+                elif float(conf) < 0.45:
+                    print_verbose(f"   [PRISMA] {equipes_noms.get(dom_id)} vs {equipes_noms.get(ext_id)} | Score: {conf_final:.2f}{incertain_str}")
             else:
                 gemini_boost = 0.0
                 conf_final = float(conf)
-                print_verbose(f"   [PRISMA PUR] {equipes_noms.get(dom_id)} vs {equipes_noms.get(ext_id)} → IA désactivée | Score: {conf_final:.2f}")
+                print_verbose(f"   [PRISMA PUR] {equipes_noms.get(dom_id)} vs {equipes_noms.get(ext_id)} → IA désactivée | Score: {conf_final:.2f}{incertain_str}")
 
             if conf_final >= seuil_confiance:
                 raw_predictions.append({
@@ -223,7 +242,8 @@ def _selectionner_meilleurs_matchs_ameliore_internal(conn, session_id, journee):
                     'equipe_dom': equipes_noms.get(dom_id), 'equipe_ext': equipes_noms.get(ext_id),
                     'prediction': pred, 'confiance': conf_final, 'fiabilite': conf_final,
                     'boost_ia': gemini_boost, 'score_base': float(conf),
-                    'cote_1': c1, 'cote_x': cx, 'cote_2': c2
+                    'cote_1': c1, 'cote_x': cx, 'cote_2': c2,
+                    'meta': meta
                 })
     final_selection = prisma_selection.filtrer_meilleurs_matchs(raw_predictions, config.MAX_PREDICTIONS_PAR_JOURNEE)
     
@@ -237,31 +257,61 @@ def _selectionner_meilleurs_matchs_ameliore_internal(conn, session_id, journee):
         p['id'] = pred_id
 
         # 2. Place Simple Bet for PRISMA
-        # We use a default stake of 1000 Ar or PERCENTAGE if not fixed
-        mise_ar = config.MONTANT_FIXE_MULTIPLE if config.USE_MONTANT_FIXE else int(get_prisma_bankroll() * 0.05)
+        # On utilise Kelly si activé et qu'on a des probabilités ML dispo
+        if getattr(config, 'PRISMA_KELLY_ENABLED', False) and p.get('meta'):
+            from ..prisma import kelly
+            bankroll = get_prisma_bankroll()
+            # On privilégie la probabilité calibrée du modèle ML si présente
+            # Sinon on peut tenter une conversion du score PRISMA en proba (moins précis)
+            prob_ml = p['meta'].get('confidence')
+            
+            if prob_ml:
+                cote_val = p.get(f'cote_{p["prediction"].lower()}')
+                mise_ar = kelly.calculate_kelly_stake(
+                    probability=prob_ml,
+                    odds=float(cote_val) if cote_val else 0,
+                    bankroll=bankroll,
+                    fraction=getattr(config, 'PRISMA_KELLY_FRACTION', 0.2),
+                    max_stake=getattr(config, 'PRISMA_MAX_STAKE', 2000),
+                    min_stake=getattr(config, 'PRISMA_MIN_STAKE', 1000)
+                )
+            else:
+                 # Fallback mise fixe si pas de probas
+                 mise_ar = config.MONTANT_FIXE_MULTIPLE if config.USE_MONTANT_FIXE else int(bankroll * 0.05)
+        else:
+            # Fallback historique
+            mise_ar = config.MONTANT_FIXE_MULTIPLE if config.USE_MONTANT_FIXE else int(get_prisma_bankroll() * 0.05)
         
+        # Sécurité minimale
+        if mise_ar <= 0:
+            logger.info(f"[PRISMA] Saut du pari pour {p['equipe_dom']} (Mise Kelly null ou espérance négative)")
+            continue
+
         fonds_suffisants, current_bankroll = deduct_prisma_funds(mise_ar)
         if fonds_suffisants:
-            cote_val = p.get('cote_1') if p['prediction'] == '1' else (p.get('cote_x') if p['prediction'] == 'X' else p.get('cote_2'))
+            cote_val = p.get('cote_1') if p['prediction'] == '1' else (p.get('cote_x') if p['prediction'] in ['X', 'N'] else p.get('cote_2'))
             enregistrer_pari(
-                session_id=session_id,
-                prediction_id=pred_id,
-                journee=journee,
-                type_pari=p['prediction'],
-                mise_ar=mise_ar,
-                pourcentage_bankroll=0.05,
-                cote_jouee=float(cote_val) if cote_val else 0,
-                resultat=None,
-                profit_net=None,
-                bankroll_apres=current_bankroll,
-                probabilite_implicite=1.0 / float(cote_val) if cote_val else None,
-                action_id=0,
-                conn=conn,
-                strategie='PRISMA'
+                PariRecord(
+                    session_id=session_id,
+                    prediction_id=pred_id,
+                    journee=journee,
+                    type_pari=p['prediction'],
+                    mise_ar=mise_ar,
+                    pourcentage_bankroll=0.05,
+                    cote_jouee=float(cote_val) if cote_val else 0,
+                    resultat=None,
+                    profit_net=None,
+                    bankroll_apres=current_bankroll,
+                    probabilite_implicite=1.0 / float(cote_val) if cote_val else None,
+                    action_id=0,
+                    strategie='PRISMA'
+                ),
+                conn=conn
             )
     
     multiple_bets.generer_pari_multiple(journee, final_selection, conn=conn)
     return final_selection
+
 def analyser_buts_recents_internal(cursor, session_id, equipe_id):
     try:
         cursor.execute("""
@@ -276,6 +326,7 @@ def analyser_buts_recents_internal(cursor, session_id, equipe_id):
         if not res: return None
         return sum(r['buts_pour'] for r in res), sum(r['buts_contre'] for r in res)
     except: return None
+
 @functools.lru_cache(maxsize=128)
 def analyser_confrontations_directes_cached(session_id, equipe_dom_id, equipe_ext_id):
     try:
@@ -293,6 +344,7 @@ def analyser_confrontations_directes(equipe_dom_id, equipe_ext_id, conn=None):
     if conn:
         return _analyser_confrontations_directes_internal(conn, session_id, equipe_dom_id, equipe_ext_id)
     return analyser_confrontations_directes_cached(session_id, equipe_dom_id, equipe_ext_id)
+
 def _analyser_confrontations_directes_internal(conn, session_id, equipe_dom_id, equipe_ext_id):
     cursor = conn.cursor()
     cursor.execute("""
@@ -310,6 +362,7 @@ def _analyser_confrontations_directes_internal(conn, session_id, equipe_dom_id, 
     if (nuls / len(hist)) >= 0.60: return -2.0
     if t_vic <= 0.20: return -3.0
     return 0
+
 def obtenir_predictions_zeus_journee(journee: int) -> List[Dict]:
     _reload_config()
     if getattr(config, 'ZEUS_DEEP_SLEEP', False):
@@ -348,6 +401,7 @@ def obtenir_predictions_zeus_journee(journee: int) -> List[Dict]:
 
                     if not m['cote_1'] or not m['cote_x'] or not m['cote_2']:
                         continue
+                    prediction_id = None
                     action_id, details = predire_pari_zeus(model, m, conn)
                     mise_ar = details.get('montant_ar', 0)
                     
@@ -390,41 +444,69 @@ def obtenir_predictions_zeus_journee(journee: int) -> List[Dict]:
                         """, (session_id, m['id'], details['type'], float(0.8), 'ZEUS'))
                         prediction_id = cursor.fetchone()['id']
                         bankroll_apres = capital_actuel - mise_ar
-                        cote_value = m.get(f'cote_{details["type"].lower()}')
+                        cote_key = 'cote_x' if details["type"] == 'N' else f'cote_{details["type"].lower()}'
+                        cote_value = m.get(cote_key)
                         enregistrer_pari(
-                            session_id=session_id,
-                            prediction_id=prediction_id,
-                            journee=journee,
-                            type_pari=details['type'],
-                            mise_ar=mise_ar,
-                            pourcentage_bankroll=mise_ar / capital_actuel if capital_actuel > 0 else 0,
-                            cote_jouee=float(cote_value) if cote_value else 0,
-                            resultat=None,
-                            profit_net=None,
-                            bankroll_apres=bankroll_apres,
-                            probabilite_implicite=1.0 / float(cote_value) if cote_value else None,
-                            action_id=action_id,
+                            PariRecord(
+                                session_id=session_id,
+                                prediction_id=prediction_id,
+                                journee=journee,
+                                type_pari=details['type'],
+                                mise_ar=mise_ar,
+                                pourcentage_bankroll=mise_ar / capital_actuel if capital_actuel > 0 else 0,
+                                cote_jouee=float(cote_value) if cote_value else 0,
+                                resultat=None,
+                                profit_net=None,
+                                bankroll_apres=bankroll_apres,
+                                probabilite_implicite=1.0 / float(cote_value) if cote_value else None,
+                                action_id=action_id,
+                            ),
                             conn=conn
                         )
                         capital_actuel = bankroll_apres
                         paris_engages += 1
                     predictions.append({
+                        'id': prediction_id, # Ajout de l'id pour le combiné
                         'match_id': m['id'],
                         'equipe_dom': m['equipe_dom_nom'],
                         'equipe_ext': m['equipe_ext_nom'],
                         'action_id': action_id,
                         'pari_type': details['type'],
+                        'prediction': details['type'], # Alias pour multiple_bets
                         'mise_ar': mise_ar,
                         'decision_formatee': formater_decision_zeus(details)
                     })
+            
+            # --- Génération du pari combiné ZEUS (Exactement 2 matchs) ---
+            placed_predictions = [p for p in predictions if p.get('mise_ar', 0) > 0]
+            if len(placed_predictions) >= 2:
+                # On prend les 2 meilleures/premières prédictions
+                multiple_bets.generer_pari_multiple(journee, placed_predictions[:2], strategie='ZEUS', conn=conn)
+
     except Exception as e:
-        logger.error(f"Erreur prédictions ZEUS J{journee} : {e}")
+        logger.error(f"Erreur prédictions ZEUS J{journee} : {e}", exc_info=True)
     return predictions
+
 def mettre_a_jour_scoring():
     try:
         with get_db_connection(write=True) as conn:
             active_session = get_active_session(conn=conn)
             session_id = active_session['id']
+            
+            # --- Auto-retrain Ensemble ML (XGBoost + CatBoost) ---
+            if getattr(config, 'PRISMA_XGBOOST_ENABLED', False):
+                try:
+                    # Ne déclencher le check d'entraînement qu'à la fin stricte d'une journée complète (10 matchs)
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT COUNT(id) AS cnt FROM matches WHERE session_id = %s AND score_dom IS NOT NULL", (session_id,))
+                    matchs_termines = cursor.fetchone()['cnt']
+                    
+                    if matchs_termines > 0 and matchs_termines % 10 == 0:
+                        from ..prisma.ensemble import train_all_models
+                        train_all_models(conn)
+                except Exception as e:
+                    logger.warning(f"[ENSEMBLE] Auto-retrain check échoué: {e}")
+
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT p.id, p.prediction, m.score_dom, m.score_ext 
