@@ -81,9 +81,15 @@ def calculer_score_prisma_v2(data, conn=None):
 
     # 2. Vérifier si l'Ensemble ML est activé (dynamiquement via DB)
     ensemble_enabled = getattr(config, 'PRISMA_XGBOOST_ENABLED', False)
+    db_conn = conn
+    
     try:
         from src.core.database import get_db_connection
-        # On utilise une connexion temporaire ou celle passée en paramètre
+        if db_conn is None:
+            db_conn = get_db_connection()
+            # Note: Si on instancie db_conn ici, il faudrait le fermer.
+            # Mais c'est plus propre d'utiliser temporairement conn_check pour le read
+            
         with get_db_connection() as conn_check:
             with conn_check.cursor() as cur:
                 cur.execute("SELECT value_int FROM prisma_config WHERE key = 'ensemble_enabled'")
@@ -105,15 +111,27 @@ def calculer_score_prisma_v2(data, conn=None):
                     try:
                         from . import poisson
                         from src.core.session_manager import get_active_session
-                        session = get_active_session(conn_check)
-                        if session:
+                        
+                        # Use the provided connection 'conn' or a fresh one
+                        if conn:
+                            session = get_active_session(conn)
                             p_res = poisson.predict_score_probs(
                                 data['equipe_dom_id'], 
                                 data['equipe_ext_id'], 
-                                conn_check, 
+                                conn, 
                                 session['id']
                             )
-                            if p_res:
+                        else:
+                            with get_db_connection() as local_conn:
+                                session = get_active_session(local_conn)
+                                p_res = poisson.predict_score_probs(
+                                    data['equipe_dom_id'], 
+                                    data['equipe_ext_id'], 
+                                    local_conn, 
+                                    session['id']
+                                )
+                                
+                        if p_res:
                                 ml_pred = ml_result['prediction']
                                 poi_probs = p_res['probabilities']
                                 poi_pred = max(poi_probs, key=poi_probs.get)

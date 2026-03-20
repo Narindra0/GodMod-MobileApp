@@ -1,6 +1,6 @@
 {
-  "trained_at": "2026-03-20T17:45:14.325066",
-  "training_samples": 270,
+  "trained_at": "2026-03-20T17:53:25.964858",
+  "training_samples": 320,
   "feature_names": [
     "pts_dom",
     "pts_ext",
@@ -36,8 +36,8 @@
     "forme_raw_ext"
   ],
   "label_distribution": {
-    "1": 129,
-    "X": 62,
-    "2": 79
+    "1": 153,
+    "X": 71,
+    "2": 96
   }
 }
