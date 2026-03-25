@@ -75,14 +75,11 @@ def callback_predictions_ia(journee: int):
             print_step("Analyse IA Booster (Gemini)")
             try:
                 active_session = intelligence.get_cached_active_session()
-                with database.get_db_connection(write=True) as conn_gen:
-                    ai_ok = ai_booster.analyze_and_store_journee(journee_prediction, active_session["id"], conn_gen)
-                if ai_ok:
-                    print_success("Boosts IA calcules et mis en cache")
-                else:
-                    print_verbose("   [AI-BOOSTER] Cache deja present ou API ignoree")
+                # Version asynchrone pour ne pas bloquer
+                ai_booster.analyze_and_store_journee_async(journee_prediction, active_session["id"])
+                print_success("Analyse IA lancée en arrière-plan")
             except Exception as ai_err:
-                logger.warning(f"[AI-BOOSTER] Erreur batch non-bloquante : {ai_err}")
+                logger.warning(f"[AI-BOOSTER] Erreur lancement asynchrone : {ai_err}")
         else:
             print_warning("Analyse IA Booster DESACTIVEE par utilisateur")
 

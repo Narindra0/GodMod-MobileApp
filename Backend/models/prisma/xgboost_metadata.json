@@ -1,8 +1,8 @@
 {
-  "trained_at": "2026-03-25T16:07:02.880928",
-  "training_samples": 5140,
-  "cv_accuracy": 0.48482490272373535,
-  "cv_std": 0.06983216350846817,
+  "trained_at": "2026-03-25T16:15:25.097852",
+  "training_samples": 6040,
+  "cv_accuracy": 0.4981788079470199,
+  "cv_std": 0.032364903094658753,
   "feature_names": [
     "pts_dom",
     "pts_ext",
@@ -47,55 +47,55 @@
     "force_relative_dom_ext"
   ],
   "feature_importance": {
-    "pts_dom": 3.7917445633410414,
-    "pts_ext": 2.7986539391317296,
-    "diff_points": 6.533849710564288,
-    "forme_dom": 2.839156844298074,
-    "forme_ext": 3.1410713342759133,
-    "diff_forme": 3.072726105057793,
-    "momentum_dom": 3.322515797070078,
-    "momentum_ext": 2.372322538352576,
-    "diff_momentum": 3.1700173471507123,
-    "instabilite_dom": 2.5432791527375858,
-    "instabilite_ext": 3.153245566414358,
-    "bp_dom": 3.647035945835057,
-    "bc_dom": 3.6954943192261904,
-    "bp_ext": 3.152842035343937,
-    "bc_ext": 3.218472091071875,
-    "diff_attaque": 3.9231571125357023,
-    "diff_defense": 3.2095478843166236,
-    "cote_1": 3.2648524279286577,
-    "cote_x": 3.7186493477862257,
-    "cote_2": 3.3936586877322683,
-    "prob_implicite_1": 2.900628187342787,
-    "prob_implicite_x": 3.2371457140730744,
-    "prob_implicite_2": 4.1454562091315905,
-    "ecart_cotes": 3.704279286315279,
-    "cotes_suspectes": 3.626595430861573,
-    "session_position": 3.3621882135166765,
-    "momentum5_dom": 3.7965077477503586,
-    "momentum5_ext": 3.4353619576035936,
-    "diff_momentum5": 3.8295445032343793
+    "pts_dom": 3.8062436905916632,
+    "pts_ext": 3.213505339148237,
+    "diff_points": 7.583320875652697,
+    "forme_dom": 3.0780973216379506,
+    "forme_ext": 3.301731877455548,
+    "diff_forme": 3.2081066453792326,
+    "momentum_dom": 3.333301568877403,
+    "momentum_ext": 3.0674886029254775,
+    "diff_momentum": 2.7006251938496915,
+    "instabilite_dom": 3.467946882624884,
+    "instabilite_ext": 2.9869316976902853,
+    "bp_dom": 3.2847023973293523,
+    "bc_dom": 4.129808496258101,
+    "bp_ext": 2.845218216381881,
+    "bc_ext": 3.215283420171877,
+    "diff_attaque": 3.562045570867409,
+    "diff_defense": 3.0085166602032727,
+    "cote_1": 2.997341265975803,
+    "cote_x": 3.535883939751996,
+    "cote_2": 3.291762313416818,
+    "prob_implicite_1": 3.1732593348924794,
+    "prob_implicite_x": 4.222390028448472,
+    "prob_implicite_2": 3.8455430055277984,
+    "ecart_cotes": 3.1537729227911884,
+    "cotes_suspectes": 2.1574512133360186,
+    "session_position": 3.5312735962173534,
+    "momentum5_dom": 3.3044715896561514,
+    "momentum5_ext": 2.921831363330099,
+    "diff_momentum5": 4.07214496961086
   },
   "label_distribution": {
-    "1": 2394,
-    "X": 1184,
-    "2": 1562
+    "1": 2834,
+    "X": 1404,
+    "2": 1802
   },
   "last_training_session": 35,
-  "last_training_day": 20,
+  "last_training_day": 31,
   "training_method": "adaptive_session_weighted",
   "session_summary": {
     "current_session": 35,
     "sessions_available": 3,
-    "total_matches": 860,
+    "total_matches": 910,
     "session_breakdown": [
       {
         "session_id": 35,
-        "match_count": 210,
+        "match_count": 260,
         "offset": 0,
         "weight": 1.0,
-        "weighted_count": 210
+        "weighted_count": 260
       },
       {
         "session_id": 34,
@@ -114,39 +114,34 @@
     ]
   },
   "complexity_context": {
-    "phase": "late",
-    "current_day": 20,
+    "phase": "end",
+    "current_day": 31,
     "config_used": {
-      "n_estimators": 200,
-      "max_depth": 5,
-      "learning_rate": 0.07,
-      "subsample": 0.9,
-      "colsample_bytree": 0.9,
-      "min_child_weight": 3,
-      "gamma": 0.3,
-      "reg_alpha": 0.1,
-      "reg_lambda": 2.0,
-      "description": "Simple - stabilit\u00e9 maximale",
-      "phase": "late",
-      "current_day": 20
+      "n_estimators": 150,
+      "max_depth": 4,
+      "learning_rate": 0.1,
+      "subsample": 0.95,
+      "colsample_bytree": 0.95,
+      "min_child_weight": 5,
+      "gamma": 0.5,
+      "reg_alpha": 0.2,
+      "reg_lambda": 3.0,
+      "description": "Minimaliste - ultra-stable",
+      "phase": "end",
+      "current_day": 31
     }
   },
   "triggers": [
     {
-      "type": "session",
-      "reason": "Nouvelle session d\u00e9tect\u00e9e: 35 > 0",
-      "priority": "high"
-    },
-    {
       "type": "day",
-      "reason": "Premier entra\u00eenement (jour 20)",
+      "reason": "\u00c9cart de 5 journ\u00e9es (>=5): J31 - J26",
       "priority": "medium"
     },
     {
       "type": "volume",
-      "reason": "Volume donn\u00e9es suffisant: 170 nouveaux matchs (>= 50)",
+      "reason": "Volume donn\u00e9es suffisant: 260 nouveaux matchs (>= 50)",
       "priority": "low"
     }
   ],
-  "primary_trigger_reason": "Nouvelle session d\u00e9tect\u00e9e: 35 > 0"
+  "primary_trigger_reason": "\u00c9cart de 5 journ\u00e9es (>=5): J31 - J26"
 }

@@ -157,6 +157,28 @@ def _store_boosts(session_id: int, journee: int, analyses: List[Dict], match_map
     logger.info(f"[AI-ANALYSIS] {stored}/{len(analyses)} analyses persistées en DB pour J{journee}.")
 
 
+def analyze_and_store_journee_async(journee: int, session_id: int):
+    """Version asynchrone de analyze_and_store_journee pour éviter les blocages."""
+    import threading
+    from ..core.database import get_db_connection
+    
+    def _run_analysis():
+        try:
+            with get_db_connection(write=True) as conn:
+                success = analyze_and_store_journee(journee, session_id, conn)
+                if success:
+                    logger.info(f"[AI-BOOSTER] Analyse asynchrone J{journee} terminée avec succès")
+                else:
+                    logger.info(f"[AI-BOOSTER] Analyse asynchrone J{journee} ignorée (cache/rate limit)")
+        except Exception as e:
+            logger.error(f"[AI-BOOSTER] Erreur analyse asynchrone J{journee}: {e}")
+    
+    # Lancer dans un thread daemon
+    thread = threading.Thread(target=_run_analysis, daemon=True)
+    thread.start()
+    logger.info(f"[AI-BOOSTER] Analyse J{journee} lancée en arrière-plan")
+
+
 def analyze_and_store_journee(journee: int, session_id: int, conn) -> bool:
     """
     Appel principal événementiel : analyse tous les matchs de la journée en un seul
