@@ -21,6 +21,51 @@ def execute_prediction_query(cursor, query: str, params: tuple = ()) -> List[Dic
     return [dict(row) for row in rows]
 
 
+def parse_ai_analysis(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Extrait et décode proprement l'analyse IA depuis technical_details ou ia_raison.
+    Gère les formats JSON string et les objets déjà mappés en dict.
+    """
+    import json
+    
+    # 1. Priorité aux technical_details (format PRISMA v2)
+    tech_details = row.get('technical_details')
+    if tech_details:
+        try:
+            # Si c'est une chaîne JSON, on la décode
+            if isinstance(tech_details, str):
+                tech_details = json.loads(tech_details)
+            
+            # Si on a un dictionnaire, on cherche ai_analysis dedans
+            if isinstance(tech_details, dict):
+                ai = tech_details.get('ai_analysis')
+                if ai:
+                    return ai
+        except:
+            pass
+            
+    # 2. Fallback sur ia_raison (format legacy ou Zeus via groq_boosts)
+    ia_raison = row.get('ia_raison')
+    if ia_raison:
+        try:
+            # Si c'est une chaîne JSON, on la décode
+            if isinstance(ia_raison, str):
+                return json.loads(ia_raison)
+            # Si c'est déjà un dictionnaire
+            if isinstance(ia_raison, dict):
+                return ia_raison
+        except:
+            # Si ce n'est pas du JSON, on retourne un objet minimal avec le texte brut
+            if isinstance(ia_raison, str) and ia_raison.strip():
+                return {
+                    "analysis": ia_raison,
+                    "confidence": row.get('fiabilite', 0),
+                    "advice": "Analyse textuelle brute."
+                }
+                
+    return None
+
+
 def get_prisma_bankroll():
     """Read PRISMA bankroll from database via prisma_finance"""
     try:
@@ -210,10 +255,10 @@ def register_routes(app: FastAPI) -> None:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             query = """
-                SELECT p.id, m.journee, e1.nom as home, e1.logo_url as home_logo, 
+                SELECT 'SIMPLE' as type, p.id, m.journee, e1.nom as home, e1.logo_url as home_logo, 
                        e2.nom as away, e2.logo_url as away_logo, 
                        p.prediction, p.fiabilite, p.succes, m.status,
-                       m.cote_1, m.cote_x, m.cote_2, p.source,
+                       m.cote_1, m.cote_x, m.cote_2, p.source, p.technical_details,
                        gb.boost as ia_boost, gb.raison as ia_raison
                 FROM predictions p
                 JOIN matches m ON p.match_id = m.id
@@ -229,7 +274,10 @@ def register_routes(app: FastAPI) -> None:
                 )
                 ORDER BY m.journee DESC
             """
-            return execute_prediction_query(cursor, query, (session_id, session_id))
+            results = execute_prediction_query(cursor, query, (session_id, session_id))
+            for r in results:
+                r['ai_analysis'] = parse_ai_analysis(r)
+            return results
 
     @app.get("/predictions/combo")
     async def get_combo_predictions():
@@ -260,6 +308,7 @@ def register_routes(app: FastAPI) -> None:
                            WHEN p.prediction IN ('X', 'N') THEN m.cote_x
                            WHEN p.prediction = '2' THEN m.cote_2
                        END as cote,
+                       p.technical_details,
                        gb.boost as ia_boost, gb.raison as ia_raison
                 FROM pari_multiple_items pmi
                 JOIN predictions p ON pmi.prediction_id = p.id
@@ -272,6 +321,12 @@ def register_routes(app: FastAPI) -> None:
                 (combo_id,),
             )
             match_rows = cursor.fetchall()
+            predictions_list = []
+            for row in match_rows:
+                r = dict(row)
+                r['ai_analysis'] = parse_ai_analysis(r)
+                predictions_list.append(r)
+
             avg_conf = sum(row["fiabilite"] for row in match_rows) / len(match_rows) if match_rows else 0
             return {
                 "id": combo_id,
@@ -279,7 +334,7 @@ def register_routes(app: FastAPI) -> None:
                 "mise_ar": combo_row["mise_ar"],
                 "cote_totale": combo_row["cote_totale"],
                 "fiabilite": avg_conf,
-                "predictions": [dict(row) for row in match_rows],
+                "predictions": predictions_list,
             }
 
     @app.get("/predictions/history")
@@ -289,11 +344,11 @@ def register_routes(app: FastAPI) -> None:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             query = """
-                SELECT p.id, m.journee, e1.nom as home, e1.logo_url as home_logo,
+                SELECT 'SIMPLE' as type, p.id, m.journee, e1.nom as home, e1.logo_url as home_logo,
                        e2.nom as away, e2.logo_url as away_logo,
                        p.prediction, p.fiabilite, p.succes, m.status,
                        m.score_dom as score_home, m.score_ext as score_away,
-                       m.cote_1, m.cote_x, m.cote_2, p.source,
+                       m.cote_1, m.cote_x, m.cote_2, p.source, p.technical_details,
                        gb.boost as ia_boost, gb.raison as ia_raison
                 FROM predictions p
                 JOIN matches m ON p.match_id = m.id
@@ -309,7 +364,10 @@ def register_routes(app: FastAPI) -> None:
             query += " ORDER BY m.journee DESC, p.id DESC LIMIT 50"
             cursor.execute(query, params)
             rows = cursor.fetchall()
-            return [dict(row) for row in rows]
+            results = [dict(row) for row in rows]
+            for r in results:
+                r['ai_analysis'] = parse_ai_analysis(r)
+            return results
 
     @app.get("/bets/history")
     async def get_bets_history():
@@ -323,7 +381,7 @@ def register_routes(app: FastAPI) -> None:
                        e2.nom as away, e2.logo_url as away_logo,
                        p.prediction, p.fiabilite, p.succes, m.status,
                        m.score_dom as score_home, m.score_ext as score_away,
-                       p.source, hp.mise_ar, hp.cote_jouee as cote, hp.profit_net,
+                       p.source, p.technical_details, hp.mise_ar, hp.cote_jouee as cote, hp.profit_net,
                        p.id as sort_key,
                        gb.boost as ia_boost, gb.raison as ia_raison
                 FROM predictions p
@@ -353,7 +411,7 @@ def register_routes(app: FastAPI) -> None:
                 cursor.execute(
                     """
                     SELECT p.id, m.journee, e1.nom as home, e2.nom as away, 
-                           p.prediction, p.fiabilite, p.source, p.succes,
+                           p.prediction, p.fiabilite, p.source, p.technical_details, p.succes,
                            gb.boost as ia_boost, gb.raison as ia_raison
                     FROM pari_multiple_items pmi
                     JOIN predictions p ON pmi.prediction_id = p.id
@@ -365,9 +423,18 @@ def register_routes(app: FastAPI) -> None:
                 """,
                     (c["id"],),
                 )
-                c["matches"] = [dict(row) for row in cursor.fetchall()]
+                m_rows = cursor.fetchall()
+                c_matches = []
+                for m_row in m_rows:
+                    mr = dict(m_row)
+                    mr['ai_analysis'] = parse_ai_analysis(mr)
+                    c_matches.append(mr)
+                c["matches"] = c_matches
 
             history = simples + combos
+            for h in history:
+                h['ai_analysis'] = parse_ai_analysis(h)
+            
             history.sort(key=lambda x: x.get("sort_key", 0), reverse=True)
             return history
 

@@ -99,37 +99,38 @@ def calculer_score_prisma_v2(data, conn=None):
     except Exception as e:
         logger.warning(f"[ENGINE] Erreur check ensemble toggle: {e}")
 
-    # 3. Tentative de prédiction via Ensemble ML
+    # 2. Tentative de prédiction via Ensemble ML
     if ensemble_enabled:
         try:
             from . import ensemble
-            ml_result = ensemble.predict_ensemble(data)
+            # Ajouter la connexion pour features avancées
+            from ..core.database import get_db_connection
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT id FROM sessions WHERE status = 'ACTIVE' LIMIT 1")
+                session_row = cursor.fetchone()
+                if session_row:
+                    data['session_id'] = session_row['id']
+                ml_result = ensemble.predict_ensemble(data)
+            
             if ml_result:
-                # --- Phase: Validation Poisson (Nouveau) ---
+                # --- Phase: Score Unifié et Validation Poisson ---
                 poisson_enabled = getattr(config, 'PRISMA_POISSON_ENABLED', False)
+                poisson_agrees = False
+                
                 if poisson_enabled:
                     try:
                         from . import poisson
                         from src.core.session_manager import get_active_session
                         
-                        # Use the provided connection 'conn' or a fresh one
-                        if conn:
-                            session = get_active_session(conn)
+                        with get_db_connection() as local_conn:
+                            session = get_active_session(local_conn)
                             p_res = poisson.predict_score_probs(
                                 data['equipe_dom_id'], 
                                 data['equipe_ext_id'], 
-                                conn, 
+                                local_conn, 
                                 session['id']
                             )
-                        else:
-                            with get_db_connection() as local_conn:
-                                session = get_active_session(local_conn)
-                                p_res = poisson.predict_score_probs(
-                                    data['equipe_dom_id'], 
-                                    data['equipe_ext_id'], 
-                                    local_conn, 
-                                    session['id']
-                                )
                                 
                         if p_res:
                                 ml_pred = ml_result['prediction']
@@ -138,19 +139,56 @@ def calculer_score_prisma_v2(data, conn=None):
                                 
                                 logger.info(f"[POISSON] Pred: {p_res['most_likely_score']} ({poi_pred}) | λ {p_res['lambda_home']:.2f}-{p_res['lambda_away']:.2f}")
                                 
-                                # Stockage pour info bulles UI plus tard
-                                ml_result['poisson_score'] = p_res['most_likely_score']
-                                ml_result['poisson_probs'] = poi_probs
+                                ml_result['poisson'] = {
+                                    'score': p_res['most_likely_score'],
+                                    'prediction': poi_pred,
+                                    'lambda_home': round(p_res['lambda_home'], 2),
+                                    'lambda_away': round(p_res['lambda_away'], 2),
+                                    'probabilities': {k: round(float(v), 2) for k, v in poi_probs.items()}
+                                }
                                 
-                                # Logique de validation simple : boost si accord
                                 if ml_pred == poi_pred:
-                                    # Boost léger de confiance si les deux modèles sont d'accord
-                                    ml_result['confidence'] = min(1.0, ml_result['confidence'] * 1.1)
+                                    poisson_agrees = True
                                     ml_result['source'] = f"{ml_result.get('source', 'ML')}+Poisson"
                     except Exception as p_err:
                         logger.warning(f"[ENGINE] Erreur Poisson validation: {p_err}")
 
-                # Retourner le résultat ML (éventuellement boosté par Poisson)
+                # --- 3. Score de Confiance Unifié ---
+                blend_conf = ml_result.get('blend_confidence', ml_result.get('confidence', 0.5))
+                divergence = ml_result.get('divergence', 0.0)
+                
+                final_score = blend_conf
+                final_score -= divergence * 0.5                     # Malus divergence
+                final_score += 0.05 if poisson_agrees else -0.05    # Bonus/Malus si Poisson
+                
+                final_score = max(0.0, min(1.0, final_score))
+                ml_result['confidence'] = final_score
+
+                # --- 4. Règle du Silence Intelligent ---
+                is_defensive = getattr(config, 'PREDICTION_DEFENSIVE_MODE', False)
+                threshold = 0.70 if is_defensive else 0.55
+                
+                refus_auto = [
+                    divergence > 0.35,           # Modèles trop en désaccord
+                    final_score < threshold,     # Confiance unifiée trop faible
+                    blend_conf < 0.50,           # Aucune issue clairement dominante
+                    poisson_enabled and not poisson_agrees # Poisson contredit le blend
+                ]
+                
+                if any(refus_auto):
+                    # On stocke pourquoi on a refusé
+                    ml_result['silence_intelligent'] = {
+                        'threshold_used': threshold,
+                        'final_score': round(final_score, 3),
+                        'divergence': round(divergence, 3),
+                        'poisson_agrees': poisson_agrees,
+                        'is_defensive': is_defensive,
+                        'reason': 'Silence Intelligent déclenché'
+                    }
+                    logger.info(f"[ENGINE] Silence Intelligent: Div={divergence:.2f}, Score={final_score:.2f}, Acc={poisson_agrees} -> NO_BET")
+                    return 'NO_BET', 0.0, ml_result
+
+                # Retourner le résultat ML unifié
                 return ml_result['prediction'], ml_result['confidence'], ml_result
         except Exception as ml_err:
             logger.error(f"[ENGINE] Erreur Ensemble ML: {ml_err}")

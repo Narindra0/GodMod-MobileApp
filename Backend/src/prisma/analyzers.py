@@ -57,3 +57,22 @@ def analyser_cotes_suspectes_prisma(c1, cx, c2):
     if 1.50 <= c_min <= 2.20:
         return 2.0
     return 0
+
+
+def analyser_confrontations_directes_prisma(cursor, session_id, equipe_dom_id, equipe_ext_id):
+    """Calcule le bonus H2H basé sur l'historique de la session."""
+    cursor.execute("""
+        SELECT score_dom, score_ext FROM matches 
+        WHERE session_id = %s AND equipe_dom_id = %s AND equipe_ext_id = %s AND score_dom IS NOT NULL
+        ORDER BY journee DESC LIMIT 5
+    """, (session_id, equipe_dom_id, equipe_ext_id))
+    hist = cursor.fetchall()
+    if not hist or len(hist) < 3: return 0
+    v_dom = sum(1 for h in hist if h['score_dom'] > h['score_ext'])
+    nuls = sum(1 for h in hist if h['score_dom'] == h['score_ext'])
+    t_vic = v_dom / len(hist)
+    if t_vic >= 0.80: return 3.0
+    if t_vic >= 0.60: return 1.5
+    if (nuls / len(hist)) >= 0.60: return -2.0
+    if t_vic <= 0.20: return -3.0
+    return 0

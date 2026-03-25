@@ -25,7 +25,8 @@ from src.core.console import (
     set_verbose_mode,
 )
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+from src.core.logging_setup import setup_app_logging
+setup_app_logging()
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -38,6 +39,20 @@ def callback_predictions_ia(journee: int):
         print_step("Validation des predictions precedentes")
         intelligence.mettre_a_jour_scoring()
         print_success("Score IA mis a jour avec les derniers resultats")
+        
+        # --- MISE À JOUR MATRICE DE FORCE ---
+        print_step("Mise à jour matrice de force relative")
+        try:
+            from src.prisma.team_strength_matrix import update_strength_matrix
+            from src.core.session_manager import get_active_session
+            with database.get_db_connection(write=True) as conn:
+                session = get_active_session(conn)
+                if session:
+                    update_strength_matrix(conn, session['id'], journee - 1)  # Journée précédente complétée
+                    print_success("Matrice de force mise à jour")
+        except Exception as e:
+            logger.warning(f"Erreur mise à jour matrice: {e}")
+        
         journee_prediction = journee + 1
         if journee_prediction < config.JOURNEE_DEPART_PREDICTION:
             print_info(f"J{journee_prediction} < J{config.JOURNEE_DEPART_PREDICTION} (seuil de demarrage)")
@@ -330,6 +345,9 @@ def main():
     try:
         intelligence.mettre_a_jour_scoring()
         print_success("Paris en attente valides au demarrage")
+        # Vérification rapide pour l'entraînement asynchrone
+        if intelligence.check_training_needs():
+            print_info("Entraînement ML requis, lancement en arrière-plan...")
     except Exception as e:
         logger.warning(f"Validation demarrage non bloquante : {e}")
     print_step(f"Demarrage de l'API FastAPI sur {api_host}:{api_port}")

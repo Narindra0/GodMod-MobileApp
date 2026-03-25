@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import gymnasium as gym
 import numpy as np
@@ -38,7 +38,7 @@ class BettingEnv(gym.Env):
         self,
         capital_initial: int = config.DEFAULT_BANKROLL,
         journee_debut: int = 1,
-        journee_fin: int = 38,
+        journee_fin: int = 37,
         mode: str = "train",
         version_ia: str = "v1.0",
         feature_session_id: Optional[int] = None,
@@ -61,10 +61,84 @@ class BettingEnv(gym.Env):
         self.session_id: Optional[int] = None
         self.conn = None
         self.risk_manager = RiskManager(capital_initial)
-        self.historique_capital = []
+        # Liste utilisée par les métriques (Sharpe, max drawdown, etc.)
+        # On la synchronise avec risk_manager.historique_capital.
+        self.historique_capital: List[int] = []
         self.total_paris = 0
         self.paris_gagnants = 0
         self.feature_session_id = feature_session_id
+        # Cache préchargé pour éviter un SQL par step() lors du calcul des features classement.
+        # Clé: (equipe_id, journee_match) -> {'position': int, 'points': int, 'forme': str}
+        self.classement_cache: Dict[tuple[int, int], Dict[str, Any]] = {}
+        self._classement_cache_feature_session_id: Optional[int] = None
+
+    def _precharger_classement_cache(self) -> None:
+        """
+        Précharge les features de classement nécessaires pour les matchs de l'épisode courant.
+        La règle métier déjà codée dans SQL est: pour un match à la journée J,
+        utiliser la dernière journée de classement strictement < J.
+        """
+        if self.feature_session_id is None:
+            self.classement_cache = {}
+            self._classement_cache_feature_session_id = None
+            return
+
+        # Si déjà préchargé pour cette session de features, on ne refait pas.
+        if self._classement_cache_feature_session_id == self.feature_session_id and self.classement_cache:
+            return
+
+        equipe_ids = set()
+        match_journees = set()
+        for m in self.matches_restants:
+            equipe_ids.add(m["equipe_dom_id"])
+            equipe_ids.add(m["equipe_ext_id"])
+            match_journees.add(m["journee"])
+
+        if not equipe_ids or not match_journees:
+            self.classement_cache = {}
+            self._classement_cache_feature_session_id = self.feature_session_id
+            return
+
+        # 1) Charger tout le classement pour la session de features (taille faible: ~20 équipes * ~37 jours).
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT equipe_id, journee, position, points, forme
+            FROM classement
+            WHERE session_id = %s
+            """,
+            (self.feature_session_id,),
+        )
+        rows = cursor.fetchall()
+
+        # 2) Indexer par équipe et trier par journee pour retrouver rapidement max(j < match_journee).
+        rows_by_team: Dict[int, List[Dict[str, Any]]] = {}
+        for row in rows:
+            rows_by_team.setdefault(row["equipe_id"], []).append(row)
+        for team_id, team_rows in rows_by_team.items():
+            team_rows.sort(key=lambda r: r["journee"])
+
+        from bisect import bisect_left
+
+        required_journees = sorted(match_journees)
+        self.classement_cache = {}
+        for team_id in equipe_ids:
+            team_rows = rows_by_team.get(team_id, [])
+            team_days = [r["journee"] for r in team_rows]
+            for j in required_journees:
+                idx = bisect_left(team_days, j) - 1  # dernier jour strictement < j
+                if idx >= 0:
+                    rec = team_rows[idx]
+                    position = rec["position"] if rec["position"] is not None else 10
+                    points = rec["points"] if rec["points"] is not None else 0
+                    forme = rec["forme"] or ""
+                else:
+                    position = 10
+                    points = 0
+                    forme = ""
+                self.classement_cache[(team_id, j)] = {"position": position, "points": points, "forme": forme}
+
+        self._classement_cache_feature_session_id = self.feature_session_id
 
     def reset(self, seed: Optional[int] = None, options: Optional[Dict] = None) -> Tuple[np.ndarray, Dict]:
         super().reset(seed=seed)
@@ -72,7 +146,8 @@ class BettingEnv(gym.Env):
         self.risk_manager = RiskManager(self.capital_initial)
         self.score_zeus = 0
         self.journee_actuelle = self.journee_debut
-        self.historique_capital = [self.capital]
+        # Synchroniser la liste utilisée par les métriques avec RiskManager.
+        self.historique_capital = self.risk_manager.historique_capital
         self.total_paris = 0
         self.paris_gagnants = 0
         if self.conn is None:
@@ -89,6 +164,7 @@ class BettingEnv(gym.Env):
         else:
             self.session_id = None
         self._charger_matches()
+        self._precharger_classement_cache()
         if len(self.matches_restants) > 0:
             self.match_actuel = self.matches_restants.pop(0)
         else:
@@ -128,7 +204,7 @@ class BettingEnv(gym.Env):
             cote_2=self.match_actuel["cote_2"],
             session_id=self.feature_session_id,
         )
-        return construire_observation(context, self.conn)
+        return construire_observation(context, self.conn, classement_cache=self.classement_cache)
 
     def _get_info(self) -> Dict:
         return {
@@ -207,14 +283,12 @@ class BettingEnv(gym.Env):
                 ),
                 conn=self.conn,
             )
-        self.historique_capital.append(self.capital)
-        terminated = False
+        terminated = self.capital < 1000
         truncated = False
-        if self.capital < 1000:
-            terminated = True
-        if len(self.matches_restants) > 0:
-            self.match_actuel = self.matches_restants.pop(0)
-        else:
+        # Mettre fin à l'épisode dès qu'on rencontre une condition de stop,
+        # pour éviter les "zombie sessions" dans la DB.
+        episode_finished = terminated or len(self.matches_restants) == 0
+        if episode_finished:
             terminated = True
             if self.session_id is not None:
                 from ..database.queries import finaliser_session
@@ -222,6 +296,9 @@ class BettingEnv(gym.Env):
                 profit_total = self.capital - self.capital_initial
                 finaliser_session(self.session_id, self.capital, profit_total, self.score_zeus, self.conn)
                 self.conn.commit()
+            self.match_actuel = None
+        else:
+            self.match_actuel = self.matches_restants.pop(0)
         next_observation = self._get_observation()
         info = self._get_info()
         return next_observation, reward, terminated, truncated, info

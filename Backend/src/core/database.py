@@ -1,18 +1,34 @@
 import logging
 import os
 from contextlib import contextmanager
+from urllib.parse import quote_plus
 
 import psycopg2
 import psycopg2.extras
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
-# Configuration PostgreSQL
-PG_HOST = os.getenv("PG_HOST", "localhost")
-PG_PORT = os.getenv("PG_PORT", "5432")
-PG_DATABASE = os.getenv("PG_DATABASE", "godmod_db")
-PG_USER = os.getenv("PG_USER", "postgres")
-PG_PASSWORD = os.getenv("PG_PASSWORD", "CONFIRMER")
+# Charger les variables d'environnement depuis .env
+load_dotenv()
+
+
+def _require_env(name: str) -> str:
+    value = os.getenv(name)
+    if value is None or value == "":
+        raise RuntimeError(
+            f"Variable d'environnement manquante: {name}. "
+            "Veuillez la definir dans le fichier .env."
+        )
+    return value
+
+
+# Configuration PostgreSQL (toutes définies dans .env)
+PG_HOST = _require_env("PG_HOST")
+PG_PORT = _require_env("PG_PORT")
+PG_DATABASE = _require_env("PG_DATABASE")
+PG_USER = _require_env("PG_USER")
+PG_PASSWORD = _require_env("PG_PASSWORD")
 
 # Équipes
 EQUIPES = [
@@ -44,14 +60,79 @@ def get_db_connection(write: bool = False):
     """
     Context manager pour les connexions PostgreSQL
     """
-    conn = psycopg2.connect(
-        host=PG_HOST,
-        port=PG_PORT,
-        database=PG_DATABASE,
-        user=PG_USER,
-        password=PG_PASSWORD,
-        cursor_factory=psycopg2.extras.RealDictCursor,
-    )
+    # Essayer différentes configurations d'encodage
+    connection_attempts = [
+        # Tentative 1: DSN string avec URL encoding (solution la plus robuste)
+        {
+            'dsn': f"postgresql://{quote_plus(PG_USER)}:{quote_plus(PG_PASSWORD)}@{PG_HOST}:{PG_PORT}/{PG_DATABASE}",
+            'cursor_factory': psycopg2.extras.RealDictCursor
+        },
+        # Tentative 2: DSN string simple
+        {
+            'dsn': f"postgresql://{PG_USER}:{PG_PASSWORD}@{PG_HOST}:{PG_PORT}/{PG_DATABASE}",
+            'cursor_factory': psycopg2.extras.RealDictCursor
+        },
+        # Tentative 3: DSN string avec client_encoding
+        {
+            'dsn': f"postgresql://{PG_USER}:{PG_PASSWORD}@{PG_HOST}:{PG_PORT}/{PG_DATABASE}?client_encoding=UTF8",
+            'cursor_factory': psycopg2.extras.RealDictCursor
+        },
+        # Tentative 4: Paramètres UTF-8 explicite
+        {
+            'host': PG_HOST,
+            'port': PG_PORT,
+            'database': PG_DATABASE,
+            'user': PG_USER,
+            'password': PG_PASSWORD,
+            'cursor_factory': psycopg2.extras.RealDictCursor,
+            'client_encoding': 'UTF8'
+        },
+        # Tentative 5: Sans encodage explicite
+        {
+            'host': PG_HOST,
+            'port': PG_PORT,
+            'database': PG_DATABASE,
+            'user': PG_USER,
+            'password': PG_PASSWORD,
+            'cursor_factory': psycopg2.extras.RealDictCursor
+        },
+        # Tentative 6: Latin-1
+        {
+            'host': PG_HOST,
+            'port': PG_PORT,
+            'database': PG_DATABASE,
+            'user': PG_USER,
+            'password': PG_PASSWORD,
+            'cursor_factory': psycopg2.extras.RealDictCursor,
+            'client_encoding': 'LATIN1'
+        }
+    ]
+    
+    conn = None
+    last_error = None
+    
+    for i, params in enumerate(connection_attempts):
+        try:
+            logger.info(f"Tentative de connexion PostgreSQL #{i+1} avec encoding={params.get('client_encoding', 'default')}")
+            conn = psycopg2.connect(**params)
+            logger.info(f"Connexion PostgreSQL réussie avec tentative #{i+1}")
+            break
+        except UnicodeDecodeError as e:
+            last_error = e
+            logger.warning(f"Échec tentative #{i+1} (erreur encodage): {e}")
+            continue
+        except Exception as e:
+            last_error = e
+            logger.warning(f"Échec tentative #{i+1}: {e}")
+            continue
+    
+    if conn is None:
+        logger.error(f"Erreur d'encodage PostgreSQL: {last_error}")
+        logger.error("Solutions possibles:")
+        logger.error("1. Vérifiez l'encodage de la base: 'SHOW client_encoding' dans psql")
+        logger.error("2. Changez le mot de passe PostgreSQL pour éviter les caractères spéciaux")
+        logger.error("3. Recréez la base avec: CREATE DATABASE godmod_db WITH ENCODING 'UTF8'")
+        raise last_error
 
     try:
         yield conn
@@ -284,6 +365,7 @@ def initialiser_db():
 
             # Index pour performance
             indexes = [
+                # Index existants
                 "CREATE INDEX IF NOT EXISTS idx_matches_session ON matches(session_id)",
                 "CREATE INDEX IF NOT EXISTS idx_matches_journee ON matches(journee)",
                 "CREATE INDEX IF NOT EXISTS idx_matches_status_journee ON matches(status, journee)",
@@ -295,6 +377,40 @@ def initialiser_db():
                 "CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status)",
                 "CREATE INDEX IF NOT EXISTS idx_matches_equipes ON matches(session_id, equipe_dom_id, equipe_ext_id)",
                 "CREATE INDEX IF NOT EXISTS idx_groq_boosts_lookup ON groq_boosts(session_id, journee)",
+                
+                # Phase 1: Index sur les Foreign Keys manquants
+                "CREATE INDEX IF NOT EXISTS idx_matches_equipe_dom ON matches(equipe_dom_id)",
+                "CREATE INDEX IF NOT EXISTS idx_matches_equipe_ext ON matches(equipe_ext_id)",
+                "CREATE INDEX IF NOT EXISTS idx_classement_equipe ON classement(equipe_id)",
+                "CREATE INDEX IF NOT EXISTS idx_predictions_match ON predictions(match_id)",
+                "CREATE INDEX IF NOT EXISTS idx_historique_prediction ON historique_paris(prediction_id)",
+                "CREATE INDEX IF NOT EXISTS idx_pari_items_prediction ON pari_multiple_items(prediction_id)",
+                "CREATE INDEX IF NOT EXISTS idx_pari_items_pari ON pari_multiple_items(pari_multiple_id)",
+                "CREATE INDEX IF NOT EXISTS idx_groq_boosts_equipes ON groq_boosts(equipe_dom_id, equipe_ext_id)",
+                
+                # Phase 1: Index pour les Requêtes Temporelles
+                "CREATE INDEX IF NOT EXISTS idx_sessions_timestamp_debut ON sessions(timestamp_debut)",
+                "CREATE INDEX IF NOT EXISTS idx_historique_timestamp_pari ON historique_paris(timestamp_pari)",
+                "CREATE INDEX IF NOT EXISTS idx_pari_multiple_timestamp ON pari_multiple(timestamp_pari)",
+                "CREATE INDEX IF NOT EXISTS idx_groq_boosts_timestamp ON groq_boosts(timestamp)",
+                
+                # Phase 2: Index pour les Filtrages Métier
+                "CREATE INDEX IF NOT EXISTS idx_historique_strategie ON historique_paris(strategie)",
+                "CREATE INDEX IF NOT EXISTS idx_pari_multiple_strategie ON pari_multiple(strategie)",
+                "CREATE INDEX IF NOT EXISTS idx_predictions_source ON predictions(source)",
+                "CREATE INDEX IF NOT EXISTS idx_predictions_resultat ON predictions(resultat)",
+                "CREATE INDEX IF NOT EXISTS idx_sessions_type ON sessions(type_session)",
+                
+                # Phase 2: Index Composite Optimisé
+                "CREATE INDEX IF NOT EXISTS idx_historique_session_journee ON historique_paris(session_id, journee)",
+                "CREATE INDEX IF NOT EXISTS idx_predictions_session_match ON predictions(session_id, match_id)",
+                "CREATE INDEX IF NOT EXISTS idx_classement_session_journee ON classement(session_id, journee)",
+                "CREATE INDEX IF NOT EXISTS idx_matches_session_status ON matches(session_id, status)",
+                
+                # Phase 3: Index pour les Agrégations
+                "CREATE INDEX IF NOT EXISTS idx_historique_session_profit ON historique_paris(session_id, profit_net)",
+                "CREATE INDEX IF NOT EXISTS idx_classement_points ON classement(points)",
+                "CREATE INDEX IF NOT EXISTS idx_predictions_fiabilite ON predictions(fiabilite)",
             ]
 
             for index_sql in indexes:

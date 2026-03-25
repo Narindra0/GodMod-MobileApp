@@ -1,6 +1,6 @@
 {
-  "trained_at": "2026-03-20T17:53:25.964858",
-  "training_samples": 320,
+  "trained_at": "2026-03-25T16:07:20.842942",
+  "training_samples": 5540,
   "feature_names": [
     "pts_dom",
     "pts_ext",
@@ -27,17 +27,91 @@
     "prob_implicite_2",
     "ecart_cotes",
     "bonus_h2h",
-    "avantage_domicile",
+    "match_equilibre",
+    "cotes_suspectes",
     "session_position",
     "momentum5_dom",
     "momentum5_ext",
     "diff_momentum5",
     "forme_raw_dom",
-    "forme_raw_ext"
+    "forme_raw_ext",
+    "rang_classement_dom",
+    "rang_classement_ext",
+    "ecart_leader_dom",
+    "ecart_leader_ext",
+    "zone_classement_dom",
+    "zone_classement_ext",
+    "pression_fin_session",
+    "force_relative_dom_ext"
   ],
   "label_distribution": {
-    "1": 153,
-    "X": 71,
-    "2": 96
-  }
+    "1": 2634,
+    "X": 1244,
+    "2": 1662
+  },
+  "last_training_session": 35,
+  "last_training_day": 26,
+  "training_method": "adaptive_session_weighted",
+  "session_summary": {
+    "current_session": 35,
+    "sessions_available": 3,
+    "total_matches": 860,
+    "session_breakdown": [
+      {
+        "session_id": 35,
+        "match_count": 210,
+        "offset": 0,
+        "weight": 1.0,
+        "weighted_count": 210
+      },
+      {
+        "session_id": 34,
+        "match_count": 280,
+        "offset": 1,
+        "weight": 0.7,
+        "weighted_count": 196
+      },
+      {
+        "session_id": 33,
+        "match_count": 370,
+        "offset": 2,
+        "weight": 0.4,
+        "weighted_count": 148
+      }
+    ]
+  },
+  "complexity_context": {
+    "phase": "end",
+    "current_day": 26,
+    "config_used": {
+      "iterations": 150,
+      "depth": 5,
+      "learning_rate": 0.1,
+      "l2_leaf_reg": 5,
+      "border_count": 64,
+      "bagging_temperature": 0.2,
+      "random_strength": 0.3,
+      "description": "Minimaliste - stabilit\u00e9 maximale",
+      "phase": "end",
+      "current_day": 26
+    }
+  },
+  "triggers": [
+    {
+      "type": "session",
+      "reason": "Nouvelle session d\u00e9tect\u00e9e: 35 > 0",
+      "priority": "high"
+    },
+    {
+      "type": "day",
+      "reason": "Premier entra\u00eenement (jour 20)",
+      "priority": "medium"
+    },
+    {
+      "type": "volume",
+      "reason": "Volume donn\u00e9es suffisant: 170 nouveaux matchs (>= 50)",
+      "priority": "low"
+    }
+  ],
+  "primary_trigger_reason": "Nouvelle session d\u00e9tect\u00e9e: 35 > 0"
 }

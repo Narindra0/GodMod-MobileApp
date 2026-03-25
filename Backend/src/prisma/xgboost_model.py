@@ -2,10 +2,13 @@
 PRISMA XGBoost — Model Management Module
 Entraînement, chargement, prédiction et ré-entraînement automatique du modèle XGBoost.
 """
-import logging
 import os
 import json
+import logging
+import numpy as np
 from datetime import datetime
+
+from . import xgboost_features
 
 logger = logging.getLogger(__name__)
 
@@ -65,132 +68,158 @@ def load_model():
         return None
 
 
-def train_model(conn, force=False):
-    """
-    Entraîne le modèle XGBoost sur les données historiques.
-    
-    Args:
-        conn: connexion DB active
-        force: si True, ré-entraîne même si un modèle existe déjà
-        
-    Returns:
-        bool: True si l'entraînement a réussi
-    """
+def train_model(conn, force=False, decision=None):
+    """Entraîne le modèle XGBoost avec complexité adaptative et triggers avancés."""
     global _model, _model_metadata
     from ..core import config
-    
+
     try:
         import xgboost as xgb
         from sklearn.model_selection import cross_val_score
     except ImportError:
         logger.warning("[XGBOOST] Bibliothèques requises manquantes. pip install xgboost scikit-learn")
         return False
+
+    # Importer les modules avancés
+    from .session_weighted_training import extract_weighted_training_data, get_training_summary
+    from .adaptive_complexity import get_training_context, log_complexity_summary
     
-    from . import xgboost_features
+    # Récupérer le contexte d'entraînement
+    from src.core.session_manager import get_active_session
+    current_session = get_active_session(conn)
+    if not current_session:
+        logger.warning("[XGBOOST] Impossible de déterminer la session actuelle")
+        return False
     
-    min_matches = getattr(config, 'PRISMA_XGBOOST_MIN_MATCHES', 100)
+    current_session_id = current_session['id']
+    current_day = current_session.get('current_day', 1)
     
-    # Extraction des données
-    X, y = xgboost_features.extract_training_data(conn)
-    if X is None or len(y) < min_matches:
+    # Utiliser la décision fournie ou évaluer les triggers si nécessaire
+    if decision is None:
+        from .training_triggers import should_retrain_models
+        decisions = should_retrain_models(conn, current_session_id, current_day)
+        xgb_decision = decisions['xgboost']
+    else:
+        xgb_decision = decision
+    
+    if not force and not xgb_decision['should_train']:
+        logger.info(f"[XGBOOST] Pas de réentraînement nécessaire: {xgb_decision['primary_reason']}")
+        return False
+    
+    # Logger la décision
+    from .training_triggers import TrainingTrigger
+    trigger_manager = TrainingTrigger(conn)
+    trigger_manager.log_training_decision(xgb_decision)
+    
+    # Récupérer le contexte de complexité adaptative
+    context = get_training_context(conn, current_session_id)
+    log_complexity_summary(context)
+    
+    # Extraire les données pondérées
+    X, y = extract_weighted_training_data(conn, current_session_id, min_matches=200)
+    if X is None or len(y) < 200:
         actual = 0 if y is None else len(y)
-        logger.info(f"[XGBOOST] Pas assez de données pour l'entraînement ({actual}/{min_matches}).")
+        logger.info(f"[XGBOOST] Pas assez de données pondérées ({actual}/200).")
         return False
     
     # XGBoost ne supporte pas les chaînes. On garde seulement les features numériques.
     if hasattr(X, 'iloc'):
-        X = X.iloc[:, :-2].values.astype('float32')
+        X = X.iloc[:, :31].values.astype('float32')  # Garder seulement les 31 premières features
     
-    if not force and _model_metadata:
-        last_count = _model_metadata.get('training_samples', 0)
-        
-        total_matches = len(y)
-        new_samples = total_matches - last_count
-        
-        # Logique des 3 Phases
-        # Phase 1: Bootstrap (< 50 matchs)
-        if total_matches < 50:
-            if last_count > 0:
-                logger.info(f"[XGBOOST] Phase 1 (Bootstrap) : {total_matches} < 50 matchs. Attente.")
-                return False
-                
-        # Phase 2: Apprentissage actif (< 300 matchs)
-        elif total_matches < 300:
-            if new_samples < 50:
-                logger.info(f"[XGBOOST] Phase 2 (Actif) : Attente 50 nouveaux matchs (actuel: {new_samples}).")
-                return False
-                
-        # Phase 3: Maturité (>= 300 matchs)
-        else:
-            if new_samples < 100:
-                logger.info(f"[XGBOOST] Phase 3 (Maturité) : Attente 100 nouveaux matchs (actuel: {new_samples}).")
-                return False
-
-    # Focus de maturité : Priorité absolue aux 740 derniers matchs (74 dernières journées)
-    if len(y) > 740:
-        logger.info(f"[XGBOOST] Écrêtage historique : {len(y)} matchs, limitation aux 740 derniers.")
-        X = X[-740:]
-        y = y[-740:]
+    logger.info(f"[XGBOOST] Début de l'entraînement adaptatif sur {len(y)} échantillons...")
     
-    logger.info(f"[XGBOOST] Début de l'entraînement sur {len(y)} matchs...")
+    # Configuration XGBoost adaptative
+    xgb_config = context['xgboost_config']
     
-    # Configuration XGBoost optimisée pour le football virtuel
     model = xgb.XGBClassifier(
-        n_estimators=200,
-        max_depth=5,
-        learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        min_child_weight=3,
-        objective='multi:softprob',
-        num_class=3,
-        eval_metric='mlogloss',
-        use_label_encoder=False,
+        n_estimators=xgb_config['n_estimators'],
+        max_depth=xgb_config['max_depth'],
+        learning_rate=xgb_config['learning_rate'],
+        subsample=xgb_config['subsample'],
+        colsample_bytree=xgb_config['colsample_bytree'],
+        min_child_weight=xgb_config['min_child_weight'],
+        gamma=xgb_config['gamma'],
+        reg_alpha=xgb_config['reg_alpha'],
+        reg_lambda=xgb_config['reg_lambda'],
         random_state=42,
-        verbosity=0,
+        n_jobs=-1,
+        eval_metric='mlogloss'
     )
     
-    # Validation croisée pour évaluer les performances
-    try:
-        cv_scores = cross_val_score(model, X, y, cv=min(5, len(y) // 10), scoring='accuracy')
-        cv_accuracy = float(cv_scores.mean())
-        logger.info(f"[XGBOOST] CV Accuracy: {cv_accuracy:.3f} (+/- {cv_scores.std():.3f})")
-    except Exception as e:
-        logger.warning(f"[XGBOOST] Cross-validation échouée: {e}. Entraînement direct.")
-        cv_accuracy = 0.0
+    # Validation croisée
+    cv_scores = cross_val_score(model, X, y, cv=5, scoring='accuracy')
+    cv_accuracy = cv_scores.mean()
+    cv_std = cv_scores.std()
     
-    # Entraînement final sur toutes les données
+    logger.info(f"[XGBOOST] CV Accuracy: {cv_accuracy:.4f} (+/- {cv_std:.4f})")
+    
+    # Entraînement final
     model.fit(X, y)
     
-    # Sauvegarde
-    model_dir = _get_model_dir()
-    os.makedirs(model_dir, exist_ok=True)
+    # Extraction des Feature Importances (Gain)
+    try:
+        booster = model.get_booster()
+        importance = booster.get_score(importance_type='gain')
+        
+        feature_importance = {}
+        total_gain = sum(importance.values())
+        
+        for k, v in importance.items():
+            idx = int(k.replace('f', ''))
+            if idx < len(xgboost_features.FEATURE_NAMES) - 2:
+                name = xgboost_features.FEATURE_NAMES[idx]
+                # Normaliser en pourcentage
+                feature_importance[name] = float((v / total_gain) * 100) if total_gain > 0 else 0.0
+                
+    except Exception as e:
+        logger.warning(f"[XGBOOST] Erreur extraction feature importance: {e}")
+        feature_importance = {}
     
-    model.save_model(_get_model_path())
-    
+    # Métadonnées enrichies
     metadata = {
         'trained_at': datetime.now().isoformat(),
         'training_samples': len(y),
         'cv_accuracy': cv_accuracy,
+        'cv_std': cv_std,
         'feature_names': xgboost_features.FEATURE_NAMES,
+        'feature_importance': feature_importance,
         'label_distribution': {
             '1': int((y == 0).sum()),
             'X': int((y == 1).sum()),
             '2': int((y == 2).sum()),
         },
+        'last_training_session': current_session_id,
+        'last_training_day': current_day,
+        'training_method': 'adaptive_session_weighted',
+        'session_summary': get_training_summary(conn, current_session_id),
+        'complexity_context': {
+            'phase': context['phase'],
+            'current_day': current_day,
+            'config_used': xgb_config
+        },
+        'triggers': xgb_decision['triggers'],
+        'primary_trigger_reason': xgb_decision['primary_reason']
     }
+    
+    # Sauvegarde
+    model_dir = _get_model_dir()
+    os.makedirs(model_dir, exist_ok=True)
+    model.save_model(_get_model_path())
+
     with open(_get_metadata_path(), 'w') as f:
         json.dump(metadata, f, indent=2)
-    
+
     _model = model
     _model_metadata = metadata
-    
+
     logger.info(
-        f"[XGBOOST] Modèle entraîné et sauvegardé. "
-        f"Accuracy CV: {cv_accuracy:.1%} | Échantillons: {len(y)} | "
-        f"Distribution: 1={metadata['label_distribution']['1']}, "
-        f"X={metadata['label_distribution']['X']}, "
-        f"2={metadata['label_distribution']['2']}"
+        f"[XGBOOST] ✅ Modèle adaptatif sauvegardé. "
+        f"Échantillons: {len(y)} | "
+        f"Session: {current_session_id} | "
+        f"Journée: {current_day} | "
+        f"Phase: {context['phase']} | "
+        f"CV: {cv_accuracy:.4f} | "
+        f"Trigger: {xgb_decision['primary_reason']}"
     )
     return True
 
@@ -244,13 +273,17 @@ def predict_match(features) -> dict:
         return None
 
 
+def get_model_metadata():
+    """Retourne les métadonnées du modèle chargé."""
+    return _model_metadata.copy() if _model_metadata else {}
+
+
 def get_model_info() -> dict:
     """Retourne les métadonnées du modèle actuel (pour l'UI/API)."""
     global _model_metadata
     
     if _model_metadata:
         return _model_metadata
-    
     meta_path = _get_metadata_path()
     if os.path.exists(meta_path):
         try:

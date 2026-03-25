@@ -8,6 +8,9 @@ from ..core import config
 
 logger = logging.getLogger(__name__)
 
+# Suivi des IAs désactivées automatiquement
+DISABLED_IAS = set()
+
 # Bornes du boost renvoyé par l'IA
 _BOOST_MIN = -5.0
 _BOOST_MAX = 5.0
@@ -17,10 +20,16 @@ _BOOST_FALLBACK = 0.0
 _RATE_LIMIT_SECONDS = 60
 
 _SYSTEM_PROMPT = (
-    "Tu es un expert en football virtuel. Analyse les statistiques fournies.\n"
-    "Retourne UNIQUEMENT un objet JSON au format : "
-    '{"matches": [{"match": "Equipe A vs Equipe B", "boost": <float -5.0 à 5.0>, "raison": "<texte court>"}]}\n'
-    "Si boost > 0 : avantage domicile. Si boost < 0 : avantage extérieur."
+    "Tu es un expert analyste en football virtuel. Analyse les statistiques fournies.\n"
+    "Ton expertise doit être technique, précise et argumentée.\n"
+    "Retourne UNIQUEMENT un objet JSON au format :\n"
+    '{"matches": [{\n'
+    '  "match": "Equipe A vs Equipe B",\n'
+    '  "prognosis": "1", "X" ou "2",\n'
+    '  "confidence": <int 0 à 100>,\n'
+    '  "analysis": "<analyse détaillée du match et lecture tactique>",\n'
+    '  "advice": "<conseil de pari spécifique>"\n'
+    '}]}\n'
 )
 
 
@@ -104,19 +113,35 @@ def _cache_exists(session_id: int, journee: int, conn) -> bool:
         return False
 
 
-def _store_boosts(session_id: int, journee: int, boosts: List[Dict], match_map: Dict[str, Dict], conn):
-    """Persiste les boosts Groq dans la table groq_boosts."""
+def _store_boosts(session_id: int, journee: int, analyses: List[Dict], match_map: Dict[str, Dict], conn):
+    """Persiste les analyses IA dans la table groq_boosts."""
     cursor = conn.cursor()
     stored = 0
-    for item in boosts:
+    for item in analyses:
         match_key = item.get("match", "")
         match_info = match_map.get(match_key)
         if not match_info:
-            logger.warning(f"[GROQ] Match inconnu dans la réponse: '{match_key}'")
+            logger.warning(f"[AI-ANALYSIS] Match inconnu dans la réponse: '{match_key}'")
             continue
-        raw_boost = float(item.get("boost", 0.0))
-        boost = max(_BOOST_MIN, min(_BOOST_MAX, raw_boost))
-        raison = str(item.get("raison", ""))[:500]
+            
+        # On garde une compatibilité avec la colonne 'boost' mais on privilégie l'analyse
+        confidence = float(item.get("confidence", 0))
+        prognosis = item.get("prognosis", "X")
+        
+        # Plus de boost mathématique, seulement l'analyse IA textuelle
+        legacy_boost = 0.0
+        
+        # Stockage de l'objet complet en JSON dans le champ 'raison'
+        analysis_data = {
+            "prognosis": prognosis,
+            "confidence": confidence,
+            "analysis": item.get("analysis", ""),
+            "advice": item.get("advice", ""),
+            "reasoning": item.get("reasoning", ""),  # Ajout du reasoning NVIDIA
+            "timestamp": datetime.now().isoformat()
+        }
+        raison_json = json.dumps(analysis_data, ensure_ascii=False)
+        
         cursor.execute(
             """
             INSERT INTO groq_boosts (session_id, journee, equipe_dom_id, equipe_ext_id, boost, raison)
@@ -124,12 +149,12 @@ def _store_boosts(session_id: int, journee: int, boosts: List[Dict], match_map: 
             ON CONFLICT (session_id, journee, equipe_dom_id, equipe_ext_id)
             DO UPDATE SET boost = EXCLUDED.boost, raison = EXCLUDED.raison, timestamp = CURRENT_TIMESTAMP
             """,
-            (session_id, journee, match_info["equipe_dom_id"], match_info["equipe_ext_id"], boost, raison),
+            (session_id, journee, match_info["equipe_dom_id"], match_info["equipe_ext_id"], legacy_boost, raison_json),
         )
         stored += 1
-        logger.info(f"[GROQ] {match_key} → Boost={boost:+.1f} | {raison}")
+        logger.info(f"[AI-ANALYSIS] {match_key} -> {prognosis} ({confidence}%)")
     conn.commit()
-    logger.info(f"[GEMINI] {stored}/{len(boosts)} boosts persistés en DB pour J{journee}.")
+    logger.info(f"[AI-ANALYSIS] {stored}/{len(analyses)} analyses persistées en DB pour J{journee}.")
 
 
 def analyze_and_store_journee(journee: int, session_id: int, conn) -> bool:
@@ -244,6 +269,10 @@ def analyze_and_store_journee(journee: int, session_id: int, conn) -> bool:
             ia_order = ["DEEPSEEK", "GEMINI", "GROQ"]
 
         logger.info(f"[AI-BOOSTER] J{journee} Cycle {cycle_idx} : Ordre IA = {' -> '.join(ia_order)}")
+        
+        # Afficher les IAs désactivées
+        if DISABLED_IAS:
+            logger.warning(f"[AI-BOOSTER] IAs désactivées (timeout) : {', '.join(DISABLED_IAS)}")
 
         # Initialisation Gemini
         from google import genai
@@ -266,6 +295,11 @@ def analyze_and_store_journee(journee: int, session_id: int, conn) -> bool:
 
             # --- LOGIQUE DE ROTATION ---
             for ia_name in ia_order:
+                # Vérifier si l'IA est désactivée
+                if ia_name in DISABLED_IAS:
+                    logger.info(f"[AI-BOOSTER] {ia_name} désactivée (timeout précédent). Skip...")
+                    continue
+                    
                 if ia_name == "GEMINI":
                     success = _analyze_with_gemini(gemini_client, gemini_model, batch_ctx)
                 elif ia_name == "GROQ":
@@ -322,7 +356,15 @@ def _analyze_with_gemini(client, model_name, batch_ctx: BoostBatchContext) -> bo
                     logger.warning(f"[GEMINI] Quota atteint. Retry {retry_count}/{MAX_RETRIES}...")
                     time.sleep(10)
                 continue
-            logger.warning(f"[GEMINI] Erreur sur batch: {e}")
+            
+            # Détecter les erreurs de timeout/gateway pour passer immédiatement à l'IA suivante
+            error_msg = str(e).lower()
+            if any(keyword in error_msg for keyword in ["timeout", "504", "gateway", "connection"]):
+                logger.warning(f"[AI-BOOSTER] GEMINI indisponible (timeout/gateway) : {e}")
+                DISABLED_IAS.add("GEMINI")
+                logger.error(f"[AI-BOOSTER] GEMINI désactivée automatiquement jusqu'au redémarrage")
+            else:
+                logger.warning(f"[GEMINI] Erreur sur batch: {e}")
             break
     return False
 
@@ -357,13 +399,20 @@ def _analyze_with_groq(batch_ctx: BoostBatchContext) -> bool:
             return True
 
     except Exception as e:
-        logger.error(f"[AI-BOOSTER] Echec du fallback GROQ : {e}")
+        # Détecter les erreurs de timeout/gateway pour passer immédiatement à l'IA suivante
+        error_msg = str(e).lower()
+        if any(keyword in error_msg for keyword in ["timeout", "504", "gateway", "connection", "rate limit"]):
+            logger.warning(f"[AI-BOOSTER] GROQ indisponible (timeout/rate limit) : {e}")
+            DISABLED_IAS.add("GROQ")
+            logger.error(f"[AI-BOOSTER] GROQ désactivée automatiquement jusqu'au redémarrage")
+        else:
+            logger.error(f"[AI-BOOSTER] Echec du fallback GROQ : {e}")
 
     return False
 
 
 def _analyze_with_deepseek(batch_ctx: BoostBatchContext) -> bool:
-    """Analyse via l'API officielle DeepSeek."""
+    """Analyse via l'API NVIDIA DeepSeek avec mode reasoning."""
     api_key = getattr(config, "DEEPSEEK_API_KEY", None)
     if not api_key:
         logger.warning("[AI-BOOSTER] DEEPSEEK_API_KEY manquante.")
@@ -376,14 +425,22 @@ def _analyze_with_deepseek(batch_ctx: BoostBatchContext) -> bool:
         model = config.DEEPSEEK_MODEL
 
         prompt = _build_batch_prompt(batch_ctx.batch)
+        
+        # Appel avec mode reasoning et paramètres NVIDIA
         completion = client.chat.completions.create(
             model=model,
             messages=[{"role": "system", "content": _SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
-            temperature=0.1,
-            response_format={"type": "json_object"} if "reasoner" not in model else None,
+            temperature=1.0,
+            top_p=0.95,
+            max_tokens=8192,
+            extra_body={"chat_template_kwargs": {"thinking": True}}
         )
 
         content = completion.choices[0].message.content
+        
+        # Récupérer le reasoning si disponible
+        reasoning_content = getattr(completion.choices[0].message, 'reasoning_content', None)
+        
         # Nettoyage si DeepSeek renvoie du markdown
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
@@ -392,32 +449,58 @@ def _analyze_with_deepseek(batch_ctx: BoostBatchContext) -> bool:
         boosts_list = parsed.get("matches", parsed.get("results", []))
 
         if boosts_list:
+            # Enrichir les résultats avec le reasoning si disponible
+            if reasoning_content:
+                for item in boosts_list:
+                    item["reasoning"] = reasoning_content
+            
             _store_boosts(batch_ctx.session_id, batch_ctx.journee, boosts_list, batch_ctx.match_map, batch_ctx.conn)
+            logger.info(f"[AI-BOOSTER] DeepSeek NVIDIA reasoning activé pour {len(boosts_list)} matchs")
             return True
 
     except Exception as e:
-        logger.error(f"[AI-BOOSTER] Echec DEEPSEEK Officiel : {e}")
+        # Détecter les erreurs de timeout/gateway pour passer immédiatement à l'IA suivante
+        error_msg = str(e).lower()
+        if any(keyword in error_msg for keyword in ["timeout", "504", "gateway", "connection"]):
+            logger.warning(f"[AI-BOOSTER] DEEPSEEK NVIDIA indisponible (timeout/gateway) : {e}")
+            DISABLED_IAS.add("DEEPSEEK")
+            logger.error(f"[AI-BOOSTER] DEEPSEEK désactivée automatiquement jusqu'au redémarrage")
+        else:
+            logger.error(f"[AI-BOOSTER] Echec DEEPSEEK NVIDIA : {e}")
 
     return False
 
 
-def get_cached_boost(session_id: int, journee: int, equipe_dom_id: int, equipe_ext_id: int, conn) -> float:
+def get_cached_analysis(session_id: int, journee: int, equipe_dom_id: int, equipe_ext_id: int, conn) -> dict:
     """
-    Lecture seule du cache groq_boosts en DB.
-    Retourne le boost stocké, ou 0.0 si pas de cache (pas d'appel API).
+    Lecture seule du cache d'analyse IA en DB.
+    Retourne l'objet d'analyse complet ou None si pas de cache.
     """
     try:
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT boost FROM groq_boosts
+            SELECT boost, raison FROM groq_boosts
             WHERE session_id = %s AND journee = %s
               AND equipe_dom_id = %s AND equipe_ext_id = %s
             """,
             (session_id, journee, equipe_dom_id, equipe_ext_id),
         )
         row = cursor.fetchone()
-        return float(row["boost"]) if row else _BOOST_FALLBACK
+        if not row:
+            return None
+            
+        try:
+            # On tente de parser la raison comme du JSON
+            return json.loads(row["raison"])
+        except (json.JSONDecodeError, TypeError):
+            # Fallback pour les anciennes entrées (texte pur)
+            return {
+                "prognosis": "1" if row["boost"] > 0 else ("2" if row["boost"] < 0 else "X"),
+                "confidence": abs(row["boost"]) * 20,
+                "analysis": row["raison"],
+                "advice": "Analyse historique disponible."
+            }
     except Exception as e:
-        logger.warning(f"[GROQ] Erreur lecture cache boost: {e}")
-        return _BOOST_FALLBACK
+        logger.warning(f"[AI-ANALYSIS] Erreur lecture cache analysis: {e}")
+        return None

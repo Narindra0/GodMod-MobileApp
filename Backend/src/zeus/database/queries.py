@@ -148,7 +148,8 @@ def finaliser_session(session_id: int, capital_final: int, profit_total: int, sc
         SET timestamp_fin = CURRENT_TIMESTAMP,
             capital_final = %s,
             profit_total = %s,
-            score_zeus = %s
+            score_zeus = %s,
+            status = 'CLOSED'
         WHERE id = %s
     """,
         (capital_final, profit_total, score_zeus, session_id),

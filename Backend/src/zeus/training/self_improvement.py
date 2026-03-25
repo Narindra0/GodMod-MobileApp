@@ -17,12 +17,9 @@ logger = logging.getLogger("ZEUS_SELF_IMPROVEMENT")
 
 def enter_deep_sleep():
     logger.info("💤 ZEUS Entre en Sommeil Profond...")
-    config.ZEUS_DEEP_SLEEP = True
-
 
 def exit_deep_sleep():
     logger.info("🌅 ZEUS se réveille.")
-    config.ZEUS_DEEP_SLEEP = False
 
 
 DEFAULT_TRAINING_TIMESTEPS = 500_000
@@ -31,7 +28,7 @@ DEFAULT_OLD_METRICS = {"avg_roi": -5.0, "std_roi": 15.0, "survival_rate": 0.85}
 
 
 def trigger_zeus_improvement(db_path: str = None):
-    current_db_path = db_path or config.DB_NAME
+    current_db_path = db_path
     try:
         with get_db_connection(write=True) as conn:
             if check_new_season_available(conn):
@@ -74,7 +71,7 @@ def trigger_zeus_improvement(db_path: str = None):
 
 
 def run_self_improvement_loop(db_path: str = None):
-    current_db_path = db_path or config.DB_NAME
+    current_db_path = db_path
     logger.info(f"🔭 Démarrage du moniteur d'auto-amélioration ZEUS sur {current_db_path} (Polling horaire)...")
     while True:
         trigger_zeus_improvement(current_db_path)

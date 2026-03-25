@@ -1,12 +1,14 @@
 import os
 from typing import List
+from dotenv import load_dotenv
+
+# Charger les variables d'environnement depuis .env
+load_dotenv()
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 LOGS_DIR = os.path.join(BASE_DIR, "logs")
-# DB_NAME est obsolète, PostgreSQL est utilisé via les variables d'environnement dans .env
-DB_NAME = None
 ZEUS_MODEL_PATH = os.path.join(MODELS_DIR, "zeus", "best", "best_model.zip")
 ZEUS_LOGS_DIR = os.path.join(LOGS_DIR, "zeus")
 DEFAULT_BANKROLL = 20000
@@ -65,7 +67,6 @@ VERBOSE_MODE = False
 
 USE_INTELLIGENCE_AMELIOREE = True
 USE_SELECTION_AMELIOREE = True
-ZEUS_DEEP_SLEEP = False
 ACTIVATE_MULTIPLE_BETS = True
 MAX_COMBINED_MATCHES = 3
 PERCENTAGE_BANKROLL_MULTIPLE = 0.05
@@ -81,7 +82,7 @@ ENSEMBLE_XGBOOST_WEIGHT = 0.5      # Poids XGBoost dans l'ensemble (0.5 = égal 
 
 # --- Poisson / Validation Score ---
 PRISMA_POISSON_ENABLED = True
-PRISMA_POISSON_MIN_MATCHES = 20
+PRISMA_POISSON_MIN_MATCHES = 10
 
 # --- Kelly Criterion / Gestion de Mise ---
 PRISMA_KELLY_ENABLED = True
@@ -121,7 +122,7 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 
-# --- Intégration IA DeepSeek (Officielle) ---
+# --- Intégration IA DeepSeek (NVIDIA API) ---
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")  # Options: deepseek-chat, deepseek-reasoner
+DEEPSEEK_BASE_URL = "https://integrate.api.nvidia.com/v1"
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-ai/deepseek-v3.2")

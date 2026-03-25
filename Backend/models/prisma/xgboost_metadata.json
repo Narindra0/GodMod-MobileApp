@@ -1,7 +1,8 @@
 {
-  "trained_at": "2026-03-20T17:44:49.699105",
-  "training_samples": 270,
-  "cv_accuracy": 0.47777777777777775,
+  "trained_at": "2026-03-25T16:07:02.880928",
+  "training_samples": 5140,
+  "cv_accuracy": 0.48482490272373535,
+  "cv_std": 0.06983216350846817,
   "feature_names": [
     "pts_dom",
     "pts_ext",
@@ -28,17 +29,124 @@
     "prob_implicite_2",
     "ecart_cotes",
     "bonus_h2h",
-    "avantage_domicile",
+    "match_equilibre",
+    "cotes_suspectes",
     "session_position",
     "momentum5_dom",
     "momentum5_ext",
     "diff_momentum5",
     "forme_raw_dom",
-    "forme_raw_ext"
+    "forme_raw_ext",
+    "rang_classement_dom",
+    "rang_classement_ext",
+    "ecart_leader_dom",
+    "ecart_leader_ext",
+    "zone_classement_dom",
+    "zone_classement_ext",
+    "pression_fin_session",
+    "force_relative_dom_ext"
   ],
+  "feature_importance": {
+    "pts_dom": 3.7917445633410414,
+    "pts_ext": 2.7986539391317296,
+    "diff_points": 6.533849710564288,
+    "forme_dom": 2.839156844298074,
+    "forme_ext": 3.1410713342759133,
+    "diff_forme": 3.072726105057793,
+    "momentum_dom": 3.322515797070078,
+    "momentum_ext": 2.372322538352576,
+    "diff_momentum": 3.1700173471507123,
+    "instabilite_dom": 2.5432791527375858,
+    "instabilite_ext": 3.153245566414358,
+    "bp_dom": 3.647035945835057,
+    "bc_dom": 3.6954943192261904,
+    "bp_ext": 3.152842035343937,
+    "bc_ext": 3.218472091071875,
+    "diff_attaque": 3.9231571125357023,
+    "diff_defense": 3.2095478843166236,
+    "cote_1": 3.2648524279286577,
+    "cote_x": 3.7186493477862257,
+    "cote_2": 3.3936586877322683,
+    "prob_implicite_1": 2.900628187342787,
+    "prob_implicite_x": 3.2371457140730744,
+    "prob_implicite_2": 4.1454562091315905,
+    "ecart_cotes": 3.704279286315279,
+    "cotes_suspectes": 3.626595430861573,
+    "session_position": 3.3621882135166765,
+    "momentum5_dom": 3.7965077477503586,
+    "momentum5_ext": 3.4353619576035936,
+    "diff_momentum5": 3.8295445032343793
+  },
   "label_distribution": {
-    "1": 129,
-    "X": 62,
-    "2": 79
-  }
+    "1": 2394,
+    "X": 1184,
+    "2": 1562
+  },
+  "last_training_session": 35,
+  "last_training_day": 20,
+  "training_method": "adaptive_session_weighted",
+  "session_summary": {
+    "current_session": 35,
+    "sessions_available": 3,
+    "total_matches": 860,
+    "session_breakdown": [
+      {
+        "session_id": 35,
+        "match_count": 210,
+        "offset": 0,
+        "weight": 1.0,
+        "weighted_count": 210
+      },
+      {
+        "session_id": 34,
+        "match_count": 280,
+        "offset": 1,
+        "weight": 0.7,
+        "weighted_count": 196
+      },
+      {
+        "session_id": 33,
+        "match_count": 370,
+        "offset": 2,
+        "weight": 0.4,
+        "weighted_count": 148
+      }
+    ]
+  },
+  "complexity_context": {
+    "phase": "late",
+    "current_day": 20,
+    "config_used": {
+      "n_estimators": 200,
+      "max_depth": 5,
+      "learning_rate": 0.07,
+      "subsample": 0.9,
+      "colsample_bytree": 0.9,
+      "min_child_weight": 3,
+      "gamma": 0.3,
+      "reg_alpha": 0.1,
+      "reg_lambda": 2.0,
+      "description": "Simple - stabilit\u00e9 maximale",
+      "phase": "late",
+      "current_day": 20
+    }
+  },
+  "triggers": [
+    {
+      "type": "session",
+      "reason": "Nouvelle session d\u00e9tect\u00e9e: 35 > 0",
+      "priority": "high"
+    },
+    {
+      "type": "day",
+      "reason": "Premier entra\u00eenement (jour 20)",
+      "priority": "medium"
+    },
+    {
+      "type": "volume",
+      "reason": "Volume donn\u00e9es suffisant: 170 nouveaux matchs (>= 50)",
+      "priority": "low"
+    }
+  ],
+  "primary_trigger_reason": "Nouvelle session d\u00e9tect\u00e9e: 35 > 0"
 }

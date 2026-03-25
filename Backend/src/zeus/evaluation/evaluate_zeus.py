@@ -1,13 +1,14 @@
 import argparse
-import sqlite3
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Optional
 
 BACKEND_DIR = Path(__file__).resolve().parents[3]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 from src.core import config
+from src.core.database import get_db_connection
 from src.zeus.environment.betting_env import BettingEnv
 from src.zeus.models.ppo_agent import load_ppo_agent
 from src.zeus.utils.metrics import PerformanceInput, afficher_rapport, generer_rapport_performance
@@ -16,30 +17,60 @@ from src.zeus.utils.metrics import PerformanceInput, afficher_rapport, generer_r
 @dataclass(frozen=True)
 class EvaluationConfig:
     model_path: str
-    db_path: str | None = None
     journee_debut: int = 1
-    journee_fin: int = 38
+    journee_fin: int = 37
     n_episodes: int = 1
     deterministic: bool = True
+    feature_session_id: Optional[int] = None
+
+
+def _select_completed_training_session(conn: Any) -> Optional[int]:
+    """
+    Sélectionne une session dont les matches couvrent au moins les journées 1 à 37 (incluses).
+    Utilisé pour fournir à ZEUS les features de classement cohérentes.
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT s.id
+        FROM sessions s
+        JOIN matches m ON m.session_id = s.id
+        WHERE m.status = 'TERMINE'
+        GROUP BY s.id
+        HAVING COUNT(DISTINCT CASE WHEN m.journee BETWEEN 1 AND 37 THEN m.journee END) = 37
+        ORDER BY s.id DESC
+        LIMIT 1
+        """
+    )
+    row = cursor.fetchone()
+    return row["id"] if row else None
 
 
 def evaluate_model(cfg: EvaluationConfig):
-    current_db_path = cfg.db_path or config.DB_NAME
     print("\n" + "=" * 60)
     print("EVALUATION ZEUS")
     print("=" * 60)
     print(f"Modele:    {cfg.model_path}")
-    print(f"Base:      {current_db_path}")
     print(f"Journees:  {cfg.journee_debut} a {cfg.journee_fin}")
     print(f"Episodes:  {cfg.n_episodes}")
     print("-" * 60)
+
+    feature_session_id = cfg.feature_session_id
+    if feature_session_id is None:
+        with get_db_connection() as conn:
+            feature_session_id = _select_completed_training_session(conn)
+        if feature_session_id is None:
+            raise ValueError(
+                "Aucune session complète trouvée pour les features ZEUS (journées 1 à 37)."
+            )
+
     env = BettingEnv(
-        db_path=current_db_path,
         capital_initial=config.DEFAULT_BANKROLL,
         journee_debut=cfg.journee_debut,
         journee_fin=cfg.journee_fin,
         mode="eval",
         version_ia="evaluation",
+        feature_session_id=feature_session_id,
     )
     print("Chargement du modele...")
     model = load_ppo_agent(cfg.model_path, env=env)
@@ -87,10 +118,15 @@ def evaluate_model(cfg: EvaluationConfig):
 def main():
     parser = argparse.ArgumentParser(description="Évaluer un modèle ZEUS entraîné")
     parser.add_argument("--model", type=str, required=True, help="Chemin vers le modèle .zip (sans extension)")
-    parser.add_argument("--db", type=str, default=config.DB_NAME, help="Chemin vers la base de données")
     parser.add_argument("--journee-debut", type=int, help="Première journée (auto-détecté si omis)")
     parser.add_argument("--journee-fin", type=int, help="Dernière journée (auto-détecté si omis)")
     parser.add_argument("--episodes", type=int, default=1, help="Nombre d'épisodes à évaluer")
+    parser.add_argument(
+        "--feature-session-id",
+        type=int,
+        default=None,
+        help="ID de session DB à utiliser pour les features de classement ZEUS (auto si omis)",
+    )
     parser.add_argument(
         "--stochastic", action="store_true", help="Utiliser des actions stochastiques au lieu de déterministes"
     )
@@ -98,23 +134,22 @@ def main():
     if args.journee_debut is None or args.journee_fin is None:
         from src.zeus.database.queries import get_available_seasons
 
-        conn = sqlite3.connect(args.db)
-        seasons = get_available_seasons(conn)
-        conn.close()
+        with get_db_connection() as conn:
+            seasons = get_available_seasons(conn)
         if len(seasons) == 0:
             print("❌ Aucune saison trouvée dans la base de données!")
             sys.exit(1)
         args.journee_debut = seasons[-1]
-        args.journee_fin = args.journee_debut + 37
+        args.journee_fin = args.journee_debut + 36
         print(f"Auto-détection: Évaluation sur journées {args.journee_debut}-{args.journee_fin}")
     evaluate_model(
         EvaluationConfig(
             model_path=args.model,
-            db_path=args.db,
             journee_debut=args.journee_debut,
             journee_fin=args.journee_fin,
             n_episodes=args.episodes,
             deterministic=not args.stochastic,
+            feature_session_id=args.feature_session_id,
         )
     )
 

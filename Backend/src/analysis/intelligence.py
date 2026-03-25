@@ -3,6 +3,7 @@ from typing import List, Dict
 import importlib
 import sys
 import functools
+import threading
 from ..core import config
 from ..core.database import get_db_connection
 from ..core.session_manager import get_active_session
@@ -16,6 +17,10 @@ from ..core.console import console, print_verbose
 from ..core.prisma_finance import is_prisma_stop_loss_active
 
 logger = logging.getLogger(__name__)
+
+# Variables globales pour la gestion de l'entraînement asynchrone
+_training_lock = threading.Lock()
+_training_in_progress = False
 
 # Cache pour les sessions et calculs statiques par journee
 @functools.lru_cache(maxsize=32)
@@ -182,9 +187,6 @@ def _selectionner_meilleurs_matchs_internal(conn, session_id, journee):
 
 def selectionner_meilleurs_matchs_ameliore(journee, conn=None):
     _reload_config()
-    if getattr(config, 'ZEUS_DEEP_SLEEP', False):
-        print_verbose(f"💤 [IA] Sommeil Profond actif (Entraînement ZEUS). Aucune prédiction.")
-        return []
     if journee < 4:
         print_verbose(f"Info : Journée {journee} < 4. Pas assez de données.")
         return []
@@ -221,18 +223,27 @@ def _selectionner_meilleurs_matchs_ameliore_internal(conn, session_id, journee):
     for m in matchs:
         match_id, dom_id, ext_id, c1, cx, c2 = m['id'], m['equipe_dom_id'], m['equipe_ext_id'], m['cote_1'], m['cote_x'], m['cote_2']
         pred, conf, meta = calculer_probabilite_amelioree(dom_id, ext_id, c1, cx, c2, conn=conn)
+        
+        if pred == 'NO_BET':
+            reason = meta.get('reason', 'Silence Intelligent')
+            print_verbose(f"   🔇 [PRISMA SILENCE] {equipes_noms.get(dom_id)} vs {equipes_noms.get(ext_id)} rejeté : {reason}")
+            continue
+
         if pred:
             incertain_str = " ⚠️ [Match incertain]" if float(conf) < 0.45 else ""
             if ai_enabled:
-                # --- Lecture du cache Gemini (lecture seule, aucun appel API) ---
-                gemini_boost = ai_booster.get_cached_boost(session_id, journee, dom_id, ext_id, conn)
-                conf_final = float(conf) + gemini_boost
-                if gemini_boost != 0.0:
-                    print_verbose(f"   [IA] {equipes_noms.get(dom_id)} vs {equipes_noms.get(ext_id)} → Boost {gemini_boost:+.1f} | Score: {conf_final:.2f}{incertain_str}")
+                # --- Lecture du cache d'analyse IA (aucun appel API ici) ---
+                ai_analysis = ai_booster.get_cached_analysis(session_id, journee, dom_id, ext_id, conn)
+                conf_final = float(conf)
+                
+                if ai_analysis:
+                    print_verbose(f"   [IA] {equipes_noms.get(dom_id)} vs {equipes_noms.get(ext_id)} → Analyse disponible ({ai_analysis.get('confidence', 0)}% de confiance)")
+                    # L'analyse est rattachée aux métadonnées pour le frontend
+                    meta['ai_analysis'] = ai_analysis
                 elif float(conf) < 0.45:
                     print_verbose(f"   [PRISMA] {equipes_noms.get(dom_id)} vs {equipes_noms.get(ext_id)} | Score: {conf_final:.2f}{incertain_str}")
             else:
-                gemini_boost = 0.0
+                ai_analysis = None
                 conf_final = float(conf)
                 print_verbose(f"   [PRISMA PUR] {equipes_noms.get(dom_id)} vs {equipes_noms.get(ext_id)} → IA désactivée | Score: {conf_final:.2f}{incertain_str}")
 
@@ -241,7 +252,7 @@ def _selectionner_meilleurs_matchs_ameliore_internal(conn, session_id, journee):
                     'match_id': match_id, 'equipe_dom_id': dom_id, 'equipe_ext_id': ext_id,
                     'equipe_dom': equipes_noms.get(dom_id), 'equipe_ext': equipes_noms.get(ext_id),
                     'prediction': pred, 'confiance': conf_final, 'fiabilite': conf_final,
-                    'boost_ia': gemini_boost, 'score_base': float(conf),
+                    'ai_analysis': ai_analysis, 'score_base': float(conf),
                     'cote_1': c1, 'cote_x': cx, 'cote_2': c2,
                     'meta': meta
                 })
@@ -251,8 +262,12 @@ def _selectionner_meilleurs_matchs_ameliore_internal(conn, session_id, journee):
 
     for p in final_selection:
         # 1. Insert into predictions
-        cursor.execute("INSERT INTO predictions (session_id, match_id, prediction, fiabilite, source) VALUES (%s, %s, %s, %s, %s) RETURNING id",
-                     (session_id, p['match_id'], p['prediction'], p['fiabilite'], 'PRISMA'))
+        import json
+        tech_json = json.dumps(p.get('meta', {}))
+        cursor.execute(
+            "INSERT INTO predictions (session_id, match_id, prediction, fiabilite, source, technical_details) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            (session_id, p['match_id'], p['prediction'], p['fiabilite'], 'PRISMA', tech_json)
+        )
         pred_id = cursor.fetchone()['id']
         p['id'] = pred_id
 
@@ -330,9 +345,12 @@ def analyser_buts_recents_internal(cursor, session_id, equipe_id):
 @functools.lru_cache(maxsize=128)
 def analyser_confrontations_directes_cached(session_id, equipe_dom_id, equipe_ext_id):
     try:
+        from ..prisma.analyzers import analyser_confrontations_directes_prisma
         with get_db_connection() as conn:
-            return _analyser_confrontations_directes_internal(conn, session_id, equipe_dom_id, equipe_ext_id)
+            with conn.cursor() as cursor:
+                return analyser_confrontations_directes_prisma(cursor, session_id, equipe_dom_id, equipe_ext_id)
     except: return 0
+
 
 def analyser_confrontations_directes(equipe_dom_id, equipe_ext_id, conn=None):
     if conn:
@@ -342,31 +360,15 @@ def analyser_confrontations_directes(equipe_dom_id, equipe_ext_id, conn=None):
     
     session_id = active_session['id']
     if conn:
-        return _analyser_confrontations_directes_internal(conn, session_id, equipe_dom_id, equipe_ext_id)
+        from ..prisma.analyzers import analyser_confrontations_directes_prisma
+        with conn.cursor() as cursor:
+            return analyser_confrontations_directes_prisma(cursor, session_id, equipe_dom_id, equipe_ext_id)
     return analyser_confrontations_directes_cached(session_id, equipe_dom_id, equipe_ext_id)
 
-def _analyser_confrontations_directes_internal(conn, session_id, equipe_dom_id, equipe_ext_id):
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT score_dom, score_ext FROM matches 
-        WHERE session_id = %s AND equipe_dom_id = %s AND equipe_ext_id = %s AND score_dom IS NOT NULL
-        ORDER BY journee DESC LIMIT 5
-    """, (session_id, equipe_dom_id, equipe_ext_id))
-    hist = cursor.fetchall()
-    if not hist or len(hist) < 3: return 0
-    v_dom = sum(1 for h in hist if h['score_dom'] > h['score_ext'])
-    nuls = sum(1 for h in hist if h['score_dom'] == h['score_ext'])
-    t_vic = v_dom / len(hist)
-    if t_vic >= 0.80: return 3.0
-    if t_vic >= 0.60: return 1.5
-    if (nuls / len(hist)) >= 0.60: return -2.0
-    if t_vic <= 0.20: return -3.0
-    return 0
+
 
 def obtenir_predictions_zeus_journee(journee: int) -> List[Dict]:
     _reload_config()
-    if getattr(config, 'ZEUS_DEEP_SLEEP', False):
-        return []
     model = get_zeus_model()
     if not model:
         logger.warning("Modèle ZEUS non trouvé pour l'inférence.")
@@ -487,7 +489,57 @@ def obtenir_predictions_zeus_journee(journee: int) -> List[Dict]:
         logger.error(f"Erreur prédictions ZEUS J{journee} : {e}", exc_info=True)
     return predictions
 
+def check_training_needs():
+    """Vérification rapide non-bloquante des besoins d'entraînement."""
+    try:
+        with get_db_connection() as conn:
+            active_session = get_active_session(conn=conn)
+            if not active_session:
+                return False
+            
+            session_id = active_session['id']
+            
+            # Vérification rapide : seulement si on a des matchs terminés
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(id) AS cnt FROM matches WHERE session_id = %s AND score_dom IS NOT NULL", (session_id,))
+            matchs_termines = cursor.fetchone()['cnt']
+            
+            # Vérifier si un entraînement est déjà en cours
+            with _training_lock:
+                if _training_in_progress:
+                    return False
+            
+            return matchs_termines > 0 and matchs_termines % 10 == 0
+            
+    except Exception as e:
+        logger.warning(f"[ENSEMBLE] Erreur vérification rapide: {e}")
+        return False
+
+
+def _train_ensemble_async():
+    """Fonction wrapper pour exécuter l'entraînement PRISMA de manière asynchrone."""
+    global _training_in_progress
+    
+    try:
+        logger.info("[ENSEMBLE] Démarrage entraînement asynchrone en arrière-plan...")
+        # Créer une nouvelle connexion dans le thread
+        with get_db_connection(write=True) as conn:
+            from ..prisma.ensemble import train_ensemble
+            success = train_ensemble(conn)
+            if success:
+                logger.info("[ENSEMBLE] Entraînement asynchrone terminé avec succès")
+            else:
+                logger.warning("[ENSEMBLE] Entraînement asynchrone échoué")
+    except Exception as e:
+        logger.error(f"[ENSEMBLE] Erreur dans l'entraînement asynchrone: {e}")
+    finally:
+        with _training_lock:
+            _training_in_progress = False
+        logger.info("[ENSEMBLE] Verrou d'entraînement libéré")
+
+
 def mettre_a_jour_scoring():
+    global _training_in_progress
     try:
         with get_db_connection(write=True) as conn:
             active_session = get_active_session(conn=conn)
@@ -496,14 +548,24 @@ def mettre_a_jour_scoring():
             # --- Auto-retrain Ensemble ML (XGBoost + CatBoost) ---
             if getattr(config, 'PRISMA_XGBOOST_ENABLED', False):
                 try:
-                    # Ne déclencher le check d'entraînement qu'à la fin stricte d'une journée complète (10 matchs)
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT COUNT(id) AS cnt FROM matches WHERE session_id = %s AND score_dom IS NOT NULL", (session_id,))
-                    matchs_termines = cursor.fetchone()['cnt']
+                    # Vérification rapide non-bloquante
+                    needs_training = check_training_needs()
                     
-                    if matchs_termines > 0 and matchs_termines % 10 == 0:
-                        from ..prisma.ensemble import train_all_models
-                        train_all_models(conn)
+                    if needs_training:
+                        # Vérifier si un entraînement est déjà en cours
+                        with _training_lock:
+                            if _training_in_progress:
+                                logger.info("[ENSEMBLE] Entraînement déjà en cours, skip...")
+                            else:
+                                _training_in_progress = True
+                                logger.info("[ENSEMBLE] Lancement entraînement asynchrone")
+                                # Lancer l'entraînement dans un thread séparé
+                                training_thread = threading.Thread(
+                                    target=_train_ensemble_async,
+                                    daemon=True  # Thread daemon pour ne pas bloquer la fermeture du programme
+                                )
+                                training_thread.start()
+                                logger.info("[ENSEMBLE] Entraînement lancé en arrière-plan, continuation du monitoring...")
                 except Exception as e:
                     logger.warning(f"[ENSEMBLE] Auto-retrain check échoué: {e}")
 

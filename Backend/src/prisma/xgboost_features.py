@@ -16,10 +16,17 @@ FEATURE_NAMES = [
     'prob_implicite_1', 'prob_implicite_x', 'prob_implicite_2',
     'ecart_cotes',
     'bonus_h2h',
-    'avantage_domicile',
+    'match_equilibre',
+    'cotes_suspectes',
     'session_position',
     'momentum5_dom', 'momentum5_ext', 'diff_momentum5',
-    'forme_raw_dom', 'forme_raw_ext'  # Pour CatBoost
+    'forme_raw_dom', 'forme_raw_ext',  # Pour CatBoost
+    # Nouvelles features avancées
+    'rang_classement_dom', 'rang_classement_ext',
+    'ecart_leader_dom', 'ecart_leader_ext',
+    'zone_classement_dom', 'zone_classement_ext',
+    'pression_fin_session',
+    'force_relative_dom_ext'  # Matrice de force relative
 ]
 
 # Mapping des labels pour la classification multiclasse
@@ -36,6 +43,57 @@ def _safe_float(val, default=0.0):
     except (ValueError, TypeError):
         return default
 
+def _get_classement_position(cursor, session_id: int, equipe_id: int, journee: int) -> dict:
+    """Extrait la position au classement et l'écart avec le leader."""
+    try:
+        # Récupérer le classement à la journée précédente
+        cursor.execute("""
+            SELECT points, position
+            FROM classement 
+            WHERE session_id = %s AND equipe_id = %s AND journee <= %s
+            ORDER BY journee DESC LIMIT 1
+        """, (session_id, equipe_id, journee - 1))
+        
+        team_result = cursor.fetchone()
+        if not team_result:
+            return {'rang': 11, 'points': 0, 'ecart_leader': 0}  # Valeurs par défaut
+        
+        # Récupérer le leader
+        cursor.execute("""
+            SELECT MAX(points) as max_points
+            FROM classement 
+            WHERE session_id = %s AND journee <= %s
+        """, (session_id, journee - 1))
+        
+        leader_result = cursor.fetchone()
+        leader_points = leader_result['max_points'] if leader_result else 0
+        
+        rang = team_result['position'] or 11
+        points = team_result['points'] or 0
+        ecart_leader = leader_points - points
+        
+        return {
+            'rang': rang,
+            'points': points,
+            'ecart_leader': ecart_leader
+        }
+    except Exception as e:
+        logger.warning(f"[FEATURES] Erreur classement position: {e}")
+        return {'rang': 11, 'points': 0, 'ecart_leader': 0}
+
+def _get_zone_classement(rang: int) -> int:
+    """Convertit le rang en zone de classement (TOP5/MIDDLE/RELEGATION)."""
+    if rang <= 5:
+        return 2  # TOP5
+    elif rang >= 16:
+        return 0  # RELEGATION
+    else:
+        return 1  # MIDDLE
+
+def _calc_pression_fin_session(journee: float) -> float:
+    """Calcule la pression en fin de session (plus élevée vers J38)."""
+    return max(0.0, (journee - 28) / 10.0)  # Commence après J28, max 1.0 à J38
+
 def _calc_momentum_5(forme_str):
     """Calcule la moyenne lissée des points sur les 5 derniers matchs."""
     if not forme_str:
@@ -47,8 +105,8 @@ def _calc_momentum_5(forme_str):
     return sum(valeurs.get(c, 0) for c in recent) / len(recent)
 
 
-def _extract_features_list(data: dict) -> list:
-    """Extrait la liste brute des features (32 éléments)."""
+def _extract_features_list(data: dict, conn=None) -> list:
+    """Extrait la liste brute des features (39 éléments avec nouvelles features)."""
     pts_dom = _safe_float(data.get('pts_dom'))
     pts_ext = _safe_float(data.get('pts_ext'))
     
@@ -80,11 +138,55 @@ def _extract_features_list(data: dict) -> list:
     ecart_cotes = abs(cote_1 - cote_2)
     bonus_h2h = _safe_float(data.get('bonus_h2h'))
     
+    # Nouvelles features ML issues de l'expertise métier
+    match_equilibre = 1.0 if analyzers.detecter_match_equilibre_prisma(cote_1, cote_x, cote_2) else 0.0
+    cotes_suspectes = float(analyzers.analyser_cotes_suspectes_prisma(cote_1, cote_x, cote_2))
+    
     journee = _safe_float(data.get('journee'), 1.0)
     session_position = journee / 38.0
     
     momentum5_dom = _calc_momentum_5(forme_dom_str)
     momentum5_ext = _calc_momentum_5(forme_ext_str)
+    
+    # --- Nouvelles features avancées ---
+    rang_dom = 11
+    rang_ext = 11
+    ecart_leader_dom = 0
+    ecart_leader_ext = 0
+    force_relative = 1.0
+    
+    # Récupérer les positions au classement si connexion disponible
+    if conn and 'session_id' in data and 'equipe_dom_id' in data:
+        try:
+            session_id = data['session_id']
+            equipe_dom_id = data['equipe_dom_id']
+            equipe_ext_id = data['equipe_ext_id']
+            
+            cursor = conn.cursor()
+            
+            # Position domicile
+            pos_dom = _get_classement_position(cursor, session_id, equipe_dom_id, journee)
+            rang_dom = pos_dom['rang']
+            ecart_leader_dom = pos_dom['ecart_leader']
+            
+            # Position extérieur
+            pos_ext = _get_classement_position(cursor, session_id, equipe_ext_id, journee)
+            rang_ext = pos_ext['rang']
+            ecart_leader_ext = pos_ext['ecart_leader']
+            
+            # Force relative depuis la matrice
+            from .team_strength_matrix import get_relative_strength
+            force_relative = get_relative_strength(equipe_dom_id, equipe_ext_id)
+            
+        except Exception as e:
+            logger.warning(f"[FEATURES] Erreur extraction features avancées: {e}")
+    
+    # Zones de classement
+    zone_dom = _get_zone_classement(rang_dom)
+    zone_ext = _get_zone_classement(rang_ext)
+    
+    # Pression fin de session
+    pression = _calc_pression_fin_session(journee)
     
     feat_values = [
         pts_dom, pts_ext, pts_dom - pts_ext,
@@ -97,33 +199,42 @@ def _extract_features_list(data: dict) -> list:
         prob_1, prob_x, prob_2,
         ecart_cotes,
         bonus_h2h,
-        1.0, # avantage_domicile
+        match_equilibre,
+        cotes_suspectes,
         session_position,
         momentum5_dom, momentum5_ext, momentum5_dom - momentum5_ext,
-        forme_dom_str, forme_ext_str  # Raw strings
+        forme_dom_str, forme_ext_str,  # Raw strings
+        # Nouvelles features
+        rang_dom, rang_ext,
+        ecart_leader_dom, ecart_leader_ext,
+        zone_dom, zone_ext,
+        pression,
+        force_relative
     ]
 
     return feat_values
 
-def extract_features(data: dict, as_dataframe: bool = False):
+def extract_features(data: dict, as_dataframe: bool = False, conn=None):
     """
     Extrait un vecteur de features à partir des données d'un match.
     
     Args:
         data: dictionnaire contenant les données du match
         as_dataframe: si True, retourne un DataFrame pandas (utile pour CatBoost/Inference)
+        conn: connexion DB pour features avancées (optionnel)
         
     Returns:
         np.ndarray ou pd.DataFrame
     """
-    feat_values = _extract_features_list(data)
+    feat_values = _extract_features_list(data, conn)
 
     if as_dataframe:
         import pandas as pd
         return pd.DataFrame([feat_values], columns=FEATURE_NAMES)
     
-    # Pour XGBoost (numérique seulement, on ignore les 2 dernières strings)
-    return np.array(feat_values[:-2], dtype=np.float32)
+    # Pour XGBoost (numérique seulement: 31 premières features numériques, exclut les 2 strings)
+    numeric_features = feat_values[:31]  # Jusqu'à 'diff_momentum5' inclus
+    return np.array(numeric_features, dtype=np.float32)
 
 
 def extract_training_data(conn, session_id: int = None):
@@ -182,6 +293,9 @@ def extract_training_data(conn, session_id: int = None):
         
         data = {
             'journee': row.get('journee', 1.0),
+            'session_id': row.get('session_id'),
+            'equipe_dom_id': row.get('equipe_dom_id'),
+            'equipe_ext_id': row.get('equipe_ext_id'),
             'pts_dom': row.get('pts_dom') or 0,
             'pts_ext': row.get('pts_ext') or 0,
             'forme_dom': row.get('forme_dom') or '',
@@ -193,11 +307,13 @@ def extract_training_data(conn, session_id: int = None):
             'cote_1': row.get('cote_1'),
             'cote_x': row.get('cote_x'),
             'cote_2': row.get('cote_2'),
-            'bonus_h2h': 0.0,
+            'bonus_h2h': analyzers.analyser_confrontations_directes_prisma(
+                cursor, row['session_id'], row['equipe_dom_id'], row['equipe_ext_id']
+            ),
         }
         
-        # On utilise _extract_features_list pour avoir exactement 32 éléments (y compris strings)
-        feat_values = _extract_features_list(data)
+        # On utilise _extract_features_list pour avoir exactement 39 éléments avec nouvelles features
+        feat_values = _extract_features_list(data, conn)
         
         data_list.append(feat_values)
         y_list.append(label)

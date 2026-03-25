@@ -3,10 +3,13 @@ PRISMA CatBoost — Model Management Module
 Entraînement, chargement, prédiction du modèle CatBoost.
 CatBoost excelle sur les features catégorielles (forme, instabilité).
 """
-import logging
 import os
 import json
+import logging
+import numpy as np
 from datetime import datetime
+
+from . import xgboost_features
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +64,8 @@ def load_model():
         return None
 
 
-def train_model(conn, force=False):
+def train_model(conn, force=False, decision=None):
+    """Entraîne le modèle CatBoost avec complexité adaptative et triggers avancés."""
     global _model, _model_metadata
     from ..core import config
 
@@ -71,47 +75,74 @@ def train_model(conn, force=False):
         logger.warning("[CATBOOST] pip install catboost requis.")
         return False
 
-    from . import xgboost_features
-
-    min_matches = getattr(config, 'PRISMA_XGBOOST_MIN_MATCHES', 100)
-
-    X, y = xgboost_features.extract_training_data(conn)
-    if X is None or len(y) < min_matches:
+    # Importer les modules avancés
+    from .session_weighted_training import extract_weighted_training_data, get_training_summary
+    from .adaptive_complexity import get_training_context, log_complexity_summary
+    
+    # Récupérer le contexte d'entraînement
+    from src.core.session_manager import get_active_session
+    current_session = get_active_session(conn)
+    if not current_session:
+        logger.warning("[CATBOOST] Impossible de déterminer la session actuelle")
+        return False
+    
+    current_session_id = current_session['id']
+    current_day = current_session.get('current_day', 1)
+    
+    # Utiliser la décision fournie ou évaluer les triggers si nécessaire
+    if decision is None:
+        from .training_triggers import should_retrain_models
+        decisions = should_retrain_models(conn, current_session_id, current_day)
+        cat_decision = decisions['catboost']
+    else:
+        cat_decision = decision
+    
+    if not force and not cat_decision['should_train']:
+        logger.info(f"[CATBOOST] Pas de réentraînement nécessaire: {cat_decision['primary_reason']}")
+        return False
+    
+    # Logger la décision
+    from .training_triggers import TrainingTrigger
+    trigger_manager = TrainingTrigger(conn)
+    trigger_manager.log_training_decision(cat_decision)
+    
+    # Récupérer le contexte de complexité adaptative
+    context = get_training_context(conn, current_session_id)
+    log_complexity_summary(context)
+    
+    # Extraire les données pondérées
+    X, y = extract_weighted_training_data(conn, current_session_id, min_matches=150)
+    if X is None or len(y) < 150:
         actual = 0 if y is None else len(y)
-        logger.info(f"[CATBOOST] Pas assez de données ({actual}/{min_matches}).")
+        logger.info(f"[CATBOOST] Pas assez de données pondérées ({actual}/150).")
         return False
 
-    if not force and _model_metadata:
-        last_count = _model_metadata.get('training_samples', 0)
-        if len(y) - last_count < 20:
-            logger.info("[CATBOOST] Pas assez de nouvelles données. Skip.")
-            return False
+    logger.info(f"[CATBOOST] Entraînement adaptatif sur {len(y)} échantillons...")
 
-    logger.info(f"[CATBOOST] Entraînement sur {len(y)} matchs...")
-
+    # Configuration CatBoost adaptative
+    cat_config = context['catboost_config']
+    
     # On utilise les noms de colonnes pour CatBoost
     cat_features = ['forme_raw_dom', 'forme_raw_ext']
 
     model = CatBoostClassifier(
-        iterations=150,
-        depth=6,
-        learning_rate=0.05,
+        iterations=cat_config['iterations'],
+        depth=cat_config['depth'],
+        learning_rate=cat_config['learning_rate'],
         loss_function='MultiClass',
         classes_count=3,
         random_seed=42,
         verbose=50,
-        l2_leaf_reg=3,
-        border_count=128,
+        l2_leaf_reg=cat_config['l2_leaf_reg'],
+        border_count=cat_config['border_count'],
+        bagging_temperature=cat_config['bagging_temperature'],
+        random_strength=cat_config['random_strength'],
         auto_class_weights='Balanced',
     )
 
     model.fit(X, y, cat_features=cat_features)
 
-    # Sauvegarde
-    model_dir = _get_model_dir()
-    os.makedirs(model_dir, exist_ok=True)
-    model.save_model(_get_model_path())
-
+    # Métadonnées enrichies
     metadata = {
         'trained_at': datetime.now().isoformat(),
         'training_samples': len(y),
@@ -121,7 +152,24 @@ def train_model(conn, force=False):
             'X': int((y == 1).sum()),
             '2': int((y == 2).sum()),
         },
+        'last_training_session': current_session_id,
+        'last_training_day': current_day,
+        'training_method': 'adaptive_session_weighted',
+        'session_summary': get_training_summary(conn, current_session_id),
+        'complexity_context': {
+            'phase': context['phase'],
+            'current_day': current_day,
+            'config_used': cat_config
+        },
+        'triggers': cat_decision['triggers'],
+        'primary_trigger_reason': cat_decision['primary_reason']
     }
+    
+    # Sauvegarde
+    model_dir = _get_model_dir()
+    os.makedirs(model_dir, exist_ok=True)
+    model.save_model(_get_model_path())
+
     with open(_get_metadata_path(), 'w') as f:
         json.dump(metadata, f, indent=2)
 
@@ -129,10 +177,12 @@ def train_model(conn, force=False):
     _model_metadata = metadata
 
     logger.info(
-        f"[CATBOOST] Modèle sauvegardé. Échantillons: {len(y)} | "
-        f"Distribution: 1={metadata['label_distribution']['1']}, "
-        f"X={metadata['label_distribution']['X']}, "
-        f"2={metadata['label_distribution']['2']}"
+        f"[CATBOOST] ✅ Modèle adaptatif sauvegardé. "
+        f"Échantillons: {len(y)} | "
+        f"Session: {current_session_id} | "
+        f"Journée: {current_day} | "
+        f"Phase: {context['phase']} | "
+        f"Trigger: {cat_decision['primary_reason']}"
     )
     return True
 
@@ -169,6 +219,11 @@ def predict_match(features) -> dict:
     except Exception as e:
         logger.error(f"[CATBOOST] Erreur prédiction: {e}", exc_info=True)
         return None
+
+
+def get_model_metadata():
+    """Retourne les métadonnées du modèle chargé."""
+    return _model_metadata.copy() if _model_metadata else {}
 
 
 def get_model_info() -> dict:

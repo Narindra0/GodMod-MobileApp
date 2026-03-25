@@ -26,7 +26,12 @@ def start_api_server(host: str = None, port: int = None):
     server_thread = threading.Thread(
         target=uvicorn.run,
         args=(app,),
-        kwargs={"host": resolved_host, "port": resolved_port, "log_level": "info"},
+        kwargs={
+            "host": resolved_host, 
+            "port": resolved_port, 
+            "log_level": "info",
+            "access_log": False # On désactive le log bruyant par défaut
+        },
         daemon=True,
         name="api-server",
     )

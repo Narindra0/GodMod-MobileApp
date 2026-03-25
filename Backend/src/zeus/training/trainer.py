@@ -94,8 +94,9 @@ def train_zeus_agent(cfg: Optional[TrainingConfig] = None):
             # Stats basiques sur la distribution des donnees (nombre de matches).
             def count_matches(j_start: int, j_end: int) -> int:
                 cursor.execute(
-                    "SELECT COUNT(*) as count FROM matches " "WHERE status = 'TERMINE' AND journee BETWEEN %s AND %s",
-                    (j_start, j_end),
+                    "SELECT COUNT(*) as count FROM matches "
+                    "WHERE status = 'TERMINE' AND journee BETWEEN %s AND %s AND session_id = %s",
+                    (j_start, j_end, feature_session_id),
                 )
                 result = cursor.fetchone()
                 return result["count"] if result else 0

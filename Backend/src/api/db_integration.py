@@ -51,6 +51,39 @@ def insert_api_ranking(ranking_data: List[Dict], session_id: int = None) -> int:
 
         cursor.execute("DELETE FROM classement WHERE session_id = %s AND journee = %s", (session_id, journee))
 
+        # Calcul agrégé des buts (pour/contre) par équipe sur toute la session.
+        # Buts_pour = score du côté où l'équipe joue (dom: score_dom, ext: score_ext)
+        # Buts_contre = score de l'adversaire correspondant (dom: score_ext, ext: score_dom)
+        cursor.execute(
+            """
+            SELECT
+                team_id,
+                COALESCE(SUM(bp), 0) AS bp,
+                COALESCE(SUM(bc), 0) AS bc
+            FROM (
+                SELECT
+                    equipe_dom_id AS team_id,
+                    score_dom AS bp,
+                    score_ext AS bc
+                FROM matches
+                WHERE session_id = %s AND score_dom IS NOT NULL AND score_ext IS NOT NULL
+                UNION ALL
+                SELECT
+                    equipe_ext_id AS team_id,
+                    score_ext AS bp,
+                    score_dom AS bc
+                FROM matches
+                WHERE session_id = %s AND score_dom IS NOT NULL AND score_ext IS NOT NULL
+            ) t
+            GROUP BY team_id
+            """,
+            (session_id, session_id),
+        )
+        stats_by_team = {
+            row["team_id"]: {"bp": row["bp"], "bc": row["bc"]}
+            for row in cursor.fetchall()
+        }
+
         insert_data = []
         for team in ranking_data:
             team_name = normalize_team_name(team.get("name"))
@@ -60,20 +93,9 @@ def insert_api_ranking(ranking_data: List[Dict], session_id: int = None) -> int:
                 position = team.get("position")
                 points = team.get("points")
                 forme = normalize_form_history(team.get("history", []))
-
-                cursor.execute(
-                    """
-                    SELECT
-                        SUM(CASE WHEN equipe_dom_id = %s THEN score_dom ELSE score_ext END) as bp,
-                        SUM(CASE WHEN equipe_dom_id = %s THEN score_ext ELSE score_dom END) as bc
-                    FROM matches
-                    WHERE session_id = %s AND (equipe_dom_id = %s OR equipe_ext_id = %s) AND score_dom IS NOT NULL
-                """,
-                    (equipe_id, equipe_id, session_id, equipe_id, equipe_id),
-                )
-                stats_buts = cursor.fetchone()
-                buts_pour = stats_buts["bp"] if stats_buts and stats_buts["bp"] is not None else 0
-                buts_contre = stats_buts["bc"] if stats_buts and stats_buts["bc"] is not None else 0
+                stats_buts = stats_by_team.get(equipe_id, {"bp": 0, "bc": 0})
+                buts_pour = stats_buts["bp"] if stats_buts and stats_buts.get("bp") is not None else 0
+                buts_contre = stats_buts["bc"] if stats_buts and stats_buts.get("bc") is not None else 0
 
                 insert_data.append((session_id, journee, equipe_id, position, points, forme, buts_pour, buts_contre))
             else:

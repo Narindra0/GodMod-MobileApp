@@ -32,36 +32,60 @@ def calculer_momentum(forme: Optional[str]) -> float:
 
 
 def extraire_features_classement(
-    equipe_dom_id: int, equipe_ext_id: int, journee: int, conn: Any, session_id: Optional[int] = None
+    equipe_dom_id: int,
+    equipe_ext_id: int,
+    journee: int,
+    conn: Any,
+    session_id: Optional[int] = None,
+    classement_cache: Optional[Dict[tuple[int, int], Dict[str, Any]]] = None,
 ) -> Dict[str, float]:
-    cursor = conn.cursor()
-    if session_id is None:
-        active_session = get_active_session()
-        session_id = active_session["id"]
-    cursor.execute(
-        """
-        SELECT equipe_id, position, points, forme
-        FROM classement
-        WHERE session_id = %s AND journee = (
-            SELECT MAX(journee)
-            FROM classement
-            WHERE session_id = %s AND journee < %s
-        )
-        AND equipe_id IN (%s, %s)
-    """,
-        (session_id, session_id, journee, equipe_dom_id, equipe_ext_id),
-    )
-    rows = cursor.fetchall()
-    data = {}
-    for row in rows:
-        equipe_id = row["equipe_id"]
-        data[equipe_id] = {
-            "position": row["position"] if row["position"] is not None else 10,
-            "points": row["points"] if row["points"] is not None else 0,
-            "forme": row["forme"],
+    if classement_cache is not None:
+        # Le cache est construit pour une fenêtre de "features" donnée et respecte la règle:
+        # utiliser la dernière journée de classement strictement < `journee`.
+        dom_data = classement_cache.get((equipe_dom_id, journee), {"position": 10, "points": 0, "forme": ""})
+        ext_data = classement_cache.get((equipe_ext_id, journee), {"position": 10, "points": 0, "forme": ""})
+
+        # Normalisation défensive (forme peut être None si des données manquent).
+        dom_data = {
+            "position": dom_data.get("position", 10) if dom_data.get("position", None) is not None else 10,
+            "points": dom_data.get("points", 0) if dom_data.get("points", None) is not None else 0,
+            "forme": dom_data.get("forme") or "",
         }
-    dom_data = data.get(equipe_dom_id, {"position": 10, "points": 0, "forme": ""})
-    ext_data = data.get(equipe_ext_id, {"position": 10, "points": 0, "forme": ""})
+        ext_data = {
+            "position": ext_data.get("position", 10) if ext_data.get("position", None) is not None else 10,
+            "points": ext_data.get("points", 0) if ext_data.get("points", None) is not None else 0,
+            "forme": ext_data.get("forme") or "",
+        }
+    else:
+        cursor = conn.cursor()
+        if session_id is None:
+            active_session = get_active_session()
+            session_id = active_session["id"]
+
+        cursor.execute(
+            """
+            SELECT equipe_id, position, points, forme
+            FROM classement
+            WHERE session_id = %s AND journee = (
+                SELECT MAX(journee)
+                FROM classement
+                WHERE session_id = %s AND journee < %s
+            )
+            AND equipe_id IN (%s, %s)
+        """,
+            (session_id, session_id, journee, equipe_dom_id, equipe_ext_id),
+        )
+        rows = cursor.fetchall()
+        data = {}
+        for row in rows:
+            equipe_id = row["equipe_id"]
+            data[equipe_id] = {
+                "position": row["position"] if row["position"] is not None else 10,
+                "points": row["points"] if row["points"] is not None else 0,
+                "forme": row["forme"],
+            }
+        dom_data = data.get(equipe_dom_id, {"position": 10, "points": 0, "forme": ""})
+        ext_data = data.get(equipe_ext_id, {"position": 10, "points": 0, "forme": ""})
     rank_diff = dom_data["position"] - ext_data["position"]
     points_diff = dom_data["points"] - ext_data["points"]
     momentum_dom = calculer_momentum(dom_data["forme"])
@@ -91,9 +115,16 @@ def extraire_features_cotes(cote_1: float, cote_x: float, cote_2: float) -> Dict
     return {"prob_1": prob_1, "prob_x": prob_x, "prob_2": prob_2}
 
 
-def construire_observation(context: ObservationContext, conn: Any) -> np.ndarray:
+def construire_observation(
+    context: ObservationContext, conn: Any, classement_cache: Optional[Dict[tuple[int, int], Dict[str, Any]]] = None
+) -> np.ndarray:
     class_features = extraire_features_classement(
-        context.equipe_dom_id, context.equipe_ext_id, context.journee, conn, context.session_id
+        context.equipe_dom_id,
+        context.equipe_ext_id,
+        context.journee,
+        conn,
+        context.session_id,
+        classement_cache=classement_cache,
     )
     cote_features = extraire_features_cotes(context.cote_1, context.cote_x, context.cote_2)
     observation = np.array(
