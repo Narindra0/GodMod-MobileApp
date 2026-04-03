@@ -2,7 +2,11 @@ import logging
 import threading
 import time
 
-import keyboard
+try:
+    import keyboard
+    KEYBOARD_AVAILABLE = True
+except (ImportError, Exception):
+    KEYBOARD_AVAILABLE = False
 from dotenv import load_dotenv
 
 from src.analysis import ai_booster, intelligence
@@ -220,7 +224,10 @@ def toggle_verbose_mode():
 
 
 def listen_for_commands():
-    """Écoute les touches 'v' et 'x' pour les actions du système"""
+    """Écoute les touches 'v' et 'x' pour les actions du système (si disponible)"""
+    if not KEYBOARD_AVAILABLE:
+        return
+
     while True:
         try:
             if keyboard.is_pressed("v"):
@@ -236,24 +243,26 @@ def listen_for_commands():
                     )
                 time.sleep(1)  # Éviter les déclenchements multiples
         except KeyboardInterrupt:
-            time.sleep(0.1)
+            break
         except Exception:
-            time.sleep(0.1)
+            time.sleep(0.5)
         time.sleep(0.1)
 
 
 def setup_logging_mode():
-    """Configure le mode simple par défaut and démarre l'écoute de la touche 'v'"""
+    """Configure le mode simple par défaut and démarre l'écoute clavier si possible"""
     # Mode simple par défaut
     set_verbose_mode(False)
     config.VERBOSE_MODE = False
     logging.getLogger().setLevel(logging.WARNING)
 
-    # Démarrer l'écoute des touches en arrière-plan
-    listener_thread = threading.Thread(target=listen_for_commands, daemon=True)
-    listener_thread.start()
-
-    print_success("Mode Simple activé par défaut (appuyez sur 'v' pour basculer, 'x' pour mode simple)")
+    # Démarrer l'écoute des touches en arrière-plan (seulement si disponible)
+    if KEYBOARD_AVAILABLE:
+        listener_thread = threading.Thread(target=listen_for_commands, daemon=True)
+        listener_thread.start()
+        print_success("Mode Simple activé par défaut (appuyez sur 'v' pour basculer, 'x' pour mode simple)")
+    else:
+        print_info("Mode Headless détecté (Clavier non disponible)")
 
 
 def main():

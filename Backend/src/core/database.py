@@ -24,12 +24,20 @@ def _require_env(name: str) -> str:
     return value
 
 
-# Configuration PostgreSQL (toutes définies dans .env)
-PG_HOST = _require_env("PG_HOST")
-PG_PORT = _require_env("PG_PORT")
-PG_DATABASE = _require_env("PG_DATABASE")
-PG_USER = _require_env("PG_USER")
-PG_PASSWORD = _require_env("PG_PASSWORD")
+# Configuration PostgreSQL
+# On tente d'abord de récupérer l'URL complète (Neon, Render, etc.)
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    # Fallback sur les paramètres individuels si DATABASE_URL n'est pas définie
+    PG_HOST = _require_env("PG_HOST")
+    PG_PORT = _require_env("PG_PORT")
+    PG_DATABASE = _require_env("PG_DATABASE")
+    PG_USER = _require_env("PG_USER")
+    PG_PASSWORD = _require_env("PG_PASSWORD")
+else:
+    # On initialise à None pour éviter les erreurs de référence plus bas
+    PG_HOST = PG_PORT = PG_DATABASE = PG_USER = PG_PASSWORD = None
 
 
 @contextmanager
@@ -39,21 +47,32 @@ def get_db_connection(write: bool = False):
     Tente d'abord une connexion DSN avec URL encoding (robuste pour les mots de passe spéciaux),
     puis une connexion par paramètres avec UTF8 explicite en fallback.
     """
-    connection_attempts = [
-        {
-            'dsn': f"postgresql://{quote_plus(PG_USER)}:{quote_plus(PG_PASSWORD)}@{PG_HOST}:{PG_PORT}/{PG_DATABASE}",
+    connection_attempts = []
+    
+    # Si on a une DATABASE_URL, c'est la priorité absolue (plus robuste)
+    if DATABASE_URL:
+        connection_attempts.append({
+            'dsn': DATABASE_URL,
             'cursor_factory': psycopg2.extras.RealDictCursor
-        },
-        {
-            'host': PG_HOST,
-            'port': PG_PORT,
-            'database': PG_DATABASE,
-            'user': PG_USER,
-            'password': PG_PASSWORD,
-            'cursor_factory': psycopg2.extras.RealDictCursor,
-            'client_encoding': 'UTF8'
-        },
-    ]
+        })
+    
+    # Fallback ou complément avec les paramètres individuels
+    if PG_USER and PG_PASSWORD and PG_HOST:
+        connection_attempts.extend([
+            {
+                'dsn': f"postgresql://{quote_plus(PG_USER)}:{quote_plus(PG_PASSWORD)}@{PG_HOST}:{PG_PORT}/{PG_DATABASE}",
+                'cursor_factory': psycopg2.extras.RealDictCursor
+            },
+            {
+                'host': PG_HOST,
+                'port': PG_PORT,
+                'database': PG_DATABASE,
+                'user': PG_USER,
+                'password': PG_PASSWORD,
+                'cursor_factory': psycopg2.extras.RealDictCursor,
+                'client_encoding': 'UTF8'
+            }
+        ])
 
     conn = None
     last_error = None
