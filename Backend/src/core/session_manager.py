@@ -1,9 +1,8 @@
 import logging
-
+from . import config, database
 from .database import get_db_connection
 
 logger = logging.getLogger(__name__)
-SESSION_MAX_DAYS = 37
 
 
 def get_active_session(conn=None):
@@ -72,8 +71,8 @@ def _create_new_session_internal(conn, previous_capital=None):
 
 
 def update_session_day(session_id, day_number, conn=None):
-    if day_number > SESSION_MAX_DAYS:
-        logger.info(f"Jour {day_number} atteint (Limite: {SESSION_MAX_DAYS}). Transition vers nouvelle session.")
+    if day_number > config.SESSION_MAX_DAYS:
+        logger.info(f"Jour {day_number} atteint (Limite: {config.SESSION_MAX_DAYS}). Transition vers nouvelle session.")
         return create_new_session(conn=conn)
     if conn:
         return _update_session_day_internal(conn, session_id, day_number)

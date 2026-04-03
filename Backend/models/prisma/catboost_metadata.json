@@ -1,6 +1,6 @@
 {
-  "trained_at": "2026-03-25T16:13:57.708148",
-  "training_samples": 5940,
+  "trained_at": "2026-04-03T10:27:11.971447",
+  "training_samples": 3820,
   "feature_names": [
     "pts_dom",
     "pts_ext",
@@ -45,73 +45,56 @@
     "force_relative_dom_ext"
   ],
   "label_distribution": {
-    "1": 2774,
-    "X": 1394,
-    "2": 1772
+    "1": 1807,
+    "X": 901,
+    "2": 1112
   },
-  "last_training_session": 35,
-  "last_training_day": 30,
+  "last_training_session": 39,
+  "last_training_day": 16,
   "training_method": "adaptive_session_weighted",
   "session_summary": {
-    "current_session": 35,
-    "sessions_available": 3,
-    "total_matches": 900,
+    "current_session": 39,
+    "sessions_available": 2,
+    "total_matches": 400,
     "session_breakdown": [
       {
-        "session_id": 35,
-        "match_count": 250,
+        "session_id": 39,
+        "match_count": 340,
         "offset": 0,
         "weight": 1.0,
-        "weighted_count": 250
+        "weighted_count": 340
       },
       {
-        "session_id": 34,
-        "match_count": 280,
+        "session_id": 38,
+        "match_count": 60,
         "offset": 1,
         "weight": 0.7,
-        "weighted_count": 196
-      },
-      {
-        "session_id": 33,
-        "match_count": 370,
-        "offset": 2,
-        "weight": 0.4,
-        "weighted_count": 148
+        "weighted_count": 42
       }
     ]
   },
   "complexity_context": {
-    "phase": "end",
-    "current_day": 30,
+    "phase": "mid",
+    "current_day": 16,
     "config_used": {
-      "iterations": 150,
-      "depth": 5,
-      "learning_rate": 0.1,
-      "l2_leaf_reg": 5,
-      "border_count": 64,
-      "bagging_temperature": 0.2,
-      "random_strength": 0.3,
-      "description": "Minimaliste - stabilit\u00e9 maximale",
-      "phase": "end",
-      "current_day": 30
+      "iterations": 250,
+      "depth": 7,
+      "learning_rate": 0.05,
+      "l2_leaf_reg": 3,
+      "border_count": 100,
+      "bagging_temperature": 0.6,
+      "random_strength": 0.8,
+      "description": "\u00c9quilibr\u00e9 - performance stable",
+      "phase": "mid",
+      "current_day": 16
     }
   },
   "triggers": [
     {
-      "type": "session",
-      "reason": "Nouvelle session d\u00e9tect\u00e9e: 35 > 0",
-      "priority": "high"
-    },
-    {
-      "type": "day",
-      "reason": "Premier entra\u00eenement (jour 26)",
-      "priority": "medium"
-    },
-    {
       "type": "volume",
-      "reason": "Volume donn\u00e9es suffisant: 210 nouveaux matchs (>= 50)",
+      "reason": "Volume donn\u00e9es suffisant: 340 nouveaux matchs (>= 50)",
       "priority": "low"
     }
   ],
-  "primary_trigger_reason": "Nouvelle session d\u00e9tect\u00e9e: 35 > 0"
+  "primary_trigger_reason": "Volume donn\u00e9es suffisant: 340 nouveaux matchs (>= 50)"
 }

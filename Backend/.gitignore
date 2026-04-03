@@ -29,11 +29,12 @@ desktop.ini
 logs/
 *.log
 
-# Data artifacts (SQLite + backups)
-data/*.db
-data/*.db.*
-data/**/*.db
-data/**/*.db.*
+# Data artifacts
+data/*.bak
+data/backups/
+
+# ML training artifacts
+catboost_info/
 
 # Streamlit
 .streamlit/secrets.toml

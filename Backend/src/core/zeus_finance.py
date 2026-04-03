@@ -31,7 +31,7 @@ def get_zeus_bankroll(session_id=None, conn=None):
     try:
         with get_db_connection() as conn:
             return _read(conn)
-    except:
+    except Exception:
         return config.DEFAULT_BANKROLL
 
 def is_zeus_stop_loss_active(session_id=None, conn=None):

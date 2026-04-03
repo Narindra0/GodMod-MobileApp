@@ -1,8 +1,3 @@
-"""
-Configuration et constantes globales pour le Backend
-Centralise les valeurs numériques pour éviter les "nombres magiques"
-"""
-
 # Limites et tailles de traitement
 DEFAULT_MARGIN = 16
 MAX_ITEMS = 50

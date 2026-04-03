@@ -63,6 +63,7 @@ JOURNEE_DEPART_PREDICTION = 2
 MAX_PREDICTIONS_PAR_JOURNEE = 3
 PRISMA_POINTS_VICTOIRE = 5
 PRISMA_POINTS_DEFAITE = -8
+SESSION_MAX_DAYS = 37  # Durée standard d'une session
 VERBOSE_MODE = False
 
 USE_INTELLIGENCE_AMELIOREE = True
@@ -121,8 +122,3 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 # --- Intégration IA Groq (Fallback) ---
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
-
-# --- Intégration IA DeepSeek (NVIDIA API) ---
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-DEEPSEEK_BASE_URL = "https://integrate.api.nvidia.com/v1"
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-ai/deepseek-v3.2")

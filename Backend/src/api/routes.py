@@ -28,7 +28,15 @@ def parse_ai_analysis(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     import json
     
-    # 1. Priorité aux technical_details (format PRISMA v2)
+    # 1. Lecture directe depuis col `ai_analysis` (nouveau format V5)
+    if row.get('ai_analysis') or row.get('ai_advice'):
+        return {
+            "analysis": row.get('ai_analysis', ''),
+            "advice": row.get('ai_advice', ''),
+            "confidence": row.get('fiabilite', 0)
+        }
+        
+    # 2. Priorité aux technical_details (format PRISMA v2)
     tech_details = row.get('technical_details')
     if tech_details:
         try:
@@ -44,7 +52,7 @@ def parse_ai_analysis(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         except:
             pass
             
-    # 2. Fallback sur ia_raison (format legacy ou Zeus via groq_boosts)
+    # 3. Fallback sur ia_raison (format legacy ou Zeus via groq_boosts)
     ia_raison = row.get('ia_raison')
     if ia_raison:
         try:
@@ -85,6 +93,36 @@ def register_routes(app: FastAPI) -> None:
             return {"status": "ok", "session_id": active_session["id"]}
         except Exception as e:
             return {"status": "error", "message": str(e)}
+
+    @app.get("/audits/latest")
+    async def get_latest_audit():
+        try:
+            import json
+            with get_db_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT start_journee, end_journee, report_json, timestamp 
+                        FROM ai_cycle_audits 
+                        ORDER BY id DESC LIMIT 1
+                    """)
+                    row = cur.fetchone()
+                    if not row:
+                        return {"audit": None}
+                    
+                    # Décodage du JSON stocké
+                    report = row["report_json"]
+                    if isinstance(report, str):
+                        report = json.loads(report)
+                        
+                    return {
+                        "start_journee": row["start_journee"],
+                        "end_journee": row["end_journee"],
+                        "report": report,
+                        "timestamp": row["timestamp"]
+                    }
+        except Exception as e:
+            logger.error(f"Erreur lors de la récupération de l'audit : {e}")
+            raise HTTPException(status_code=500, detail=f"Erreur DB: {str(e)}")
 
     @app.get("/settings/ai")
     async def get_ai_settings():
@@ -259,12 +297,11 @@ def register_routes(app: FastAPI) -> None:
                        e2.nom as away, e2.logo_url as away_logo, 
                        p.prediction, p.fiabilite, p.succes, m.status,
                        m.cote_1, m.cote_x, m.cote_2, p.source, p.technical_details,
-                       gb.boost as ia_boost, gb.raison as ia_raison
+                       p.ai_analysis, p.ai_advice
                 FROM predictions p
                 JOIN matches m ON p.match_id = m.id
                 JOIN equipes e1 ON m.equipe_dom_id = e1.id
                 JOIN equipes e2 ON m.equipe_ext_id = e2.id
-                LEFT JOIN groq_boosts gb ON p.session_id = gb.session_id AND m.journee = gb.journee AND m.equipe_dom_id = gb.equipe_dom_id AND m.equipe_ext_id = gb.equipe_ext_id
                 WHERE p.session_id = %s AND p.succes IS NULL
                 AND p.id NOT IN (
                     SELECT pmi.prediction_id 
@@ -308,14 +345,12 @@ def register_routes(app: FastAPI) -> None:
                            WHEN p.prediction IN ('X', 'N') THEN m.cote_x
                            WHEN p.prediction = '2' THEN m.cote_2
                        END as cote,
-                       p.technical_details,
-                       gb.boost as ia_boost, gb.raison as ia_raison
+                       p.technical_details, p.ai_analysis, p.ai_advice
                 FROM pari_multiple_items pmi
                 JOIN predictions p ON pmi.prediction_id = p.id
                 JOIN matches m ON p.match_id = m.id
                 JOIN equipes e1 ON m.equipe_dom_id = e1.id
                 JOIN equipes e2 ON m.equipe_ext_id = e2.id
-                LEFT JOIN groq_boosts gb ON p.session_id = gb.session_id AND m.journee = gb.journee AND m.equipe_dom_id = gb.equipe_dom_id AND m.equipe_ext_id = gb.equipe_ext_id
                 WHERE pmi.pari_multiple_id = %s
             """,
                 (combo_id,),
@@ -349,12 +384,11 @@ def register_routes(app: FastAPI) -> None:
                        p.prediction, p.fiabilite, p.succes, m.status,
                        m.score_dom as score_home, m.score_ext as score_away,
                        m.cote_1, m.cote_x, m.cote_2, p.source, p.technical_details,
-                       gb.boost as ia_boost, gb.raison as ia_raison
+                       p.ai_analysis, p.ai_advice
                 FROM predictions p
                 JOIN matches m ON p.match_id = m.id
                 JOIN equipes e1 ON m.equipe_dom_id = e1.id
                 JOIN equipes e2 ON m.equipe_ext_id = e2.id
-                LEFT JOIN groq_boosts gb ON p.session_id = gb.session_id AND m.journee = gb.journee AND m.equipe_dom_id = gb.equipe_dom_id AND m.equipe_ext_id = gb.equipe_ext_id
                 WHERE p.session_id = %s AND p.succes IS NOT NULL
             """
             params = [session_id]
@@ -382,14 +416,12 @@ def register_routes(app: FastAPI) -> None:
                        p.prediction, p.fiabilite, p.succes, m.status,
                        m.score_dom as score_home, m.score_ext as score_away,
                        p.source, p.technical_details, hp.mise_ar, hp.cote_jouee as cote, hp.profit_net,
-                       p.id as sort_key,
-                       gb.boost as ia_boost, gb.raison as ia_raison
+                       p.id as sort_key, p.ai_analysis, p.ai_advice
                 FROM predictions p
                 JOIN matches m ON p.match_id = m.id
                 JOIN equipes e1 ON m.equipe_dom_id = e1.id
                 JOIN equipes e2 ON m.equipe_ext_id = e2.id
                 LEFT JOIN historique_paris hp ON p.id = hp.prediction_id
-                LEFT JOIN groq_boosts gb ON p.session_id = gb.session_id AND m.journee = gb.journee AND m.equipe_dom_id = gb.equipe_dom_id AND m.equipe_ext_id = gb.equipe_ext_id
                 WHERE p.session_id = %s AND p.succes IS NOT NULL
                 AND p.id NOT IN (SELECT prediction_id FROM pari_multiple_items)
             """,
@@ -412,13 +444,12 @@ def register_routes(app: FastAPI) -> None:
                     """
                     SELECT p.id, m.journee, e1.nom as home, e2.nom as away, 
                            p.prediction, p.fiabilite, p.source, p.technical_details, p.succes,
-                           gb.boost as ia_boost, gb.raison as ia_raison
+                           p.ai_analysis, p.ai_advice
                     FROM pari_multiple_items pmi
                     JOIN predictions p ON pmi.prediction_id = p.id
                     JOIN matches m ON p.match_id = m.id
                     JOIN equipes e1 ON m.equipe_dom_id = e1.id
                     JOIN equipes e2 ON m.equipe_ext_id = e2.id
-                    LEFT JOIN groq_boosts gb ON p.session_id = gb.session_id AND m.journee = gb.journee AND m.equipe_dom_id = gb.equipe_dom_id AND m.equipe_ext_id = gb.equipe_ext_id
                     WHERE pmi.pari_multiple_id = %s
                 """,
                     (c["id"],),
@@ -491,10 +522,11 @@ def register_routes(app: FastAPI) -> None:
                     "pari_multiple_items",
                     "pari_multiple",
                     "historique_paris",
-                    "groq_boosts",
+                    "match_insights",
                     "predictions",
                     "classement",
                     "matches",
+                    "ai_cycle_audits",
                     "sessions",
                     "prisma_config",
                 ]

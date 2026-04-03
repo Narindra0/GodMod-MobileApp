@@ -12,9 +12,9 @@ from ..prisma import selection as prisma_selection
 from ..zeus.models.inference import get_zeus_model, predire_pari_zeus, formater_decision_zeus
 from ..zeus.database.queries import get_matches_for_journee, enregistrer_pari, valider_paris_zeus, PariRecord
 from . import multiple_bets
-from . import ai_booster
 from ..core.console import console, print_verbose
 from ..core.prisma_finance import is_prisma_stop_loss_active
+from ..core.utils import safe_json_dumps
 
 logger = logging.getLogger(__name__)
 
@@ -214,11 +214,6 @@ def _selectionner_meilleurs_matchs_ameliore_internal(conn, session_id, journee):
     matchs = cursor.fetchall()
     cursor.execute("SELECT id, nom FROM equipes")
     equipes_noms = {r['id']: r['nom'] for r in cursor.fetchall()}
-    # --- Vérification globale AI Enabled (Une seule fois hors de la boucle) ---
-    cursor.execute("SELECT value_int FROM prisma_config WHERE key = 'ai_enabled'")
-    row_ai = cursor.fetchone()
-    ai_enabled = bool(row_ai['value_int']) if row_ai and row_ai['value_int'] is not None else True
-
     raw_predictions = []
     for m in matchs:
         match_id, dom_id, ext_id, c1, cx, c2 = m['id'], m['equipe_dom_id'], m['equipe_ext_id'], m['cote_1'], m['cote_x'], m['cote_2']
@@ -230,29 +225,38 @@ def _selectionner_meilleurs_matchs_ameliore_internal(conn, session_id, journee):
             continue
 
         if pred:
-            incertain_str = " ⚠️ [Match incertain]" if float(conf) < 0.45 else ""
-            if ai_enabled:
-                # --- Lecture du cache d'analyse IA (aucun appel API ici) ---
-                ai_analysis = ai_booster.get_cached_analysis(session_id, journee, dom_id, ext_id, conn)
-                conf_final = float(conf)
-                
-                if ai_analysis:
-                    print_verbose(f"   [IA] {equipes_noms.get(dom_id)} vs {equipes_noms.get(ext_id)} → Analyse disponible ({ai_analysis.get('confidence', 0)}% de confiance)")
-                    # L'analyse est rattachée aux métadonnées pour le frontend
-                    meta['ai_analysis'] = ai_analysis
-                elif float(conf) < 0.45:
-                    print_verbose(f"   [PRISMA] {equipes_noms.get(dom_id)} vs {equipes_noms.get(ext_id)} | Score: {conf_final:.2f}{incertain_str}")
-            else:
-                ai_analysis = None
-                conf_final = float(conf)
-                print_verbose(f"   [PRISMA PUR] {equipes_noms.get(dom_id)} vs {equipes_noms.get(ext_id)} → IA désactivée | Score: {conf_final:.2f}{incertain_str}")
+            conf_final = float(conf)
+            incertain_str = " ⚠️ [Match incertain]" if conf_final < 0.45 else ""
+            print_verbose(f"   [PRISMA] {equipes_noms.get(dom_id)} vs {equipes_noms.get(ext_id)} | Score: {conf_final:.2f}{incertain_str}")
 
-            if conf_final >= seuil_confiance:
+            # --- Ajustement Dynamique du Seuil ---
+            # Si la source est l'Ensemble ML, le score est une probabilité (0-1)
+            # Sinon (Fallback), c'est un score PRISMA classique (0-15+)
+            is_ml = meta.get('source', '').startswith('Ensemble') or meta.get('source', '').startswith('ML')
+            
+            if is_ml:
+                # Seuils de probabilité pour l'IA (équivalents aux seuils 7-10 classiques)
+                if seuil_confiance >= 10.0: # Mode Crise
+                    seuil_ml = 0.85
+                elif seuil_confiance >= 8.5: # Mode Prudent
+                    seuil_ml = 0.75
+                elif seuil_confiance <= 6.0: # Mode Offensif
+                    seuil_ml = 0.60
+                else: # Standard
+                    seuil_ml = 0.70
+                
+                authorized = conf_final >= seuil_ml
+                print_verbose(f"   [PRISMA ML] {equipes_noms.get(dom_id)} vs {equipes_noms.get(ext_id)} | Conf: {conf_final:.2f} (Seuil IA: {seuil_ml}) {'✅' if authorized else '❌'}")
+            else:
+                authorized = conf_final >= seuil_confiance
+                print_verbose(f"   [PRISMA CLASSIQUE] {equipes_noms.get(dom_id)} vs {equipes_noms.get(ext_id)} | Score: {conf_final:.2f} (Seuil: {seuil_confiance}) {'✅' if authorized else '❌'}")
+
+            if authorized:
                 raw_predictions.append({
                     'match_id': match_id, 'equipe_dom_id': dom_id, 'equipe_ext_id': ext_id,
                     'equipe_dom': equipes_noms.get(dom_id), 'equipe_ext': equipes_noms.get(ext_id),
                     'prediction': pred, 'confiance': conf_final, 'fiabilite': conf_final,
-                    'ai_analysis': ai_analysis, 'score_base': float(conf),
+                    'ai_analysis': None, 'score_base': float(conf),
                     'cote_1': c1, 'cote_x': cx, 'cote_2': c2,
                     'meta': meta
                 })
@@ -262,11 +266,11 @@ def _selectionner_meilleurs_matchs_ameliore_internal(conn, session_id, journee):
 
     for p in final_selection:
         # 1. Insert into predictions
-        import json
-        tech_json = json.dumps(p.get('meta', {}))
+        tech_json_str = safe_json_dumps(p.get('meta', {}))
+        
         cursor.execute(
-            "INSERT INTO predictions (session_id, match_id, prediction, fiabilite, source, technical_details) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-            (session_id, p['match_id'], p['prediction'], p['fiabilite'], 'PRISMA', tech_json)
+            "INSERT INTO predictions (session_id, match_id, prediction, fiabilite, source, technical_details, ai_analysis, ai_advice) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (session_id, p['match_id'], p['prediction'], p['fiabilite'], 'PRISMA', tech_json_str, None, None)
         )
         pred_id = cursor.fetchone()['id']
         p['id'] = pred_id

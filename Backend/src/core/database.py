@@ -7,9 +7,10 @@ import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
 
+from . import config
+
 logger = logging.getLogger(__name__)
 
-# Charger les variables d'environnement depuis .env
 load_dotenv()
 
 
@@ -30,54 +31,19 @@ PG_DATABASE = _require_env("PG_DATABASE")
 PG_USER = _require_env("PG_USER")
 PG_PASSWORD = _require_env("PG_PASSWORD")
 
-# Équipes
-EQUIPES = [
-    "London Reds",
-    "Manchester Blue",
-    "Manchester Red",
-    "Wolverhampton",
-    "N. Forest",
-    "Fulham",
-    "West Ham",
-    "Spurs",
-    "London Blues",
-    "Brighton",
-    "Brentford",
-    "Everton",
-    "Aston Villa",
-    "Leeds",
-    "Sunderland",
-    "Crystal Palace",
-    "Liverpool",
-    "Newcastle",
-    "Burnley",
-    "Bournemouth",
-]
-
 
 @contextmanager
 def get_db_connection(write: bool = False):
     """
-    Context manager pour les connexions PostgreSQL
+    Context manager pour les connexions PostgreSQL.
+    Tente d'abord une connexion DSN avec URL encoding (robuste pour les mots de passe spéciaux),
+    puis une connexion par paramètres avec UTF8 explicite en fallback.
     """
-    # Essayer différentes configurations d'encodage
     connection_attempts = [
-        # Tentative 1: DSN string avec URL encoding (solution la plus robuste)
         {
             'dsn': f"postgresql://{quote_plus(PG_USER)}:{quote_plus(PG_PASSWORD)}@{PG_HOST}:{PG_PORT}/{PG_DATABASE}",
             'cursor_factory': psycopg2.extras.RealDictCursor
         },
-        # Tentative 2: DSN string simple
-        {
-            'dsn': f"postgresql://{PG_USER}:{PG_PASSWORD}@{PG_HOST}:{PG_PORT}/{PG_DATABASE}",
-            'cursor_factory': psycopg2.extras.RealDictCursor
-        },
-        # Tentative 3: DSN string avec client_encoding
-        {
-            'dsn': f"postgresql://{PG_USER}:{PG_PASSWORD}@{PG_HOST}:{PG_PORT}/{PG_DATABASE}?client_encoding=UTF8",
-            'cursor_factory': psycopg2.extras.RealDictCursor
-        },
-        # Tentative 4: Paramètres UTF-8 explicite
         {
             'host': PG_HOST,
             'port': PG_PORT,
@@ -87,62 +53,38 @@ def get_db_connection(write: bool = False):
             'cursor_factory': psycopg2.extras.RealDictCursor,
             'client_encoding': 'UTF8'
         },
-        # Tentative 5: Sans encodage explicite
-        {
-            'host': PG_HOST,
-            'port': PG_PORT,
-            'database': PG_DATABASE,
-            'user': PG_USER,
-            'password': PG_PASSWORD,
-            'cursor_factory': psycopg2.extras.RealDictCursor
-        },
-        # Tentative 6: Latin-1
-        {
-            'host': PG_HOST,
-            'port': PG_PORT,
-            'database': PG_DATABASE,
-            'user': PG_USER,
-            'password': PG_PASSWORD,
-            'cursor_factory': psycopg2.extras.RealDictCursor,
-            'client_encoding': 'LATIN1'
-        }
     ]
-    
+
     conn = None
     last_error = None
-    
+
     for i, params in enumerate(connection_attempts):
         try:
-            logger.info(f"Tentative de connexion PostgreSQL #{i+1} avec encoding={params.get('client_encoding', 'default')}")
             conn = psycopg2.connect(**params)
-            logger.info(f"Connexion PostgreSQL réussie avec tentative #{i+1}")
             break
-        except UnicodeDecodeError as e:
-            last_error = e
-            logger.warning(f"Échec tentative #{i+1} (erreur encodage): {e}")
-            continue
         except Exception as e:
             last_error = e
-            logger.warning(f"Échec tentative #{i+1}: {e}")
+            logger.warning(f"Échec connexion PostgreSQL tentative #{i+1}: {e}")
             continue
-    
+
     if conn is None:
-        logger.error(f"Erreur d'encodage PostgreSQL: {last_error}")
-        logger.error("Solutions possibles:")
-        logger.error("1. Vérifiez l'encodage de la base: 'SHOW client_encoding' dans psql")
-        logger.error("2. Changez le mot de passe PostgreSQL pour éviter les caractères spéciaux")
-        logger.error("3. Recréez la base avec: CREATE DATABASE godmod_db WITH ENCODING 'UTF8'")
-        raise last_error
+        logger.error(f"Impossible de se connecter à PostgreSQL: {last_error}")
+        if isinstance(last_error, Exception):
+            raise last_error
+        raise RuntimeError("Impossible de se connecter à PostgreSQL")
 
     try:
         yield conn
-        conn.commit()
+        if conn is not None:
+            conn.commit()
     except Exception as e:
-        conn.rollback()
+        if conn is not None:
+            conn.rollback()
         logger.error(f"Erreur DB PostgreSQL, rollback effectué: {e}", exc_info=True)
         raise
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 def create_new_schema(conn):
@@ -219,8 +161,8 @@ def create_new_schema(conn):
         position INTEGER,
         points INTEGER NOT NULL,
         forme TEXT,
-        buts_pour DECIMAL(4,2) DEFAULT 0,
-        buts_contre DECIMAL(4,2) DEFAULT 0,
+        buts_pour INTEGER DEFAULT 0,
+        buts_contre INTEGER DEFAULT 0,
         FOREIGN KEY (session_id) REFERENCES sessions(id),
         FOREIGN KEY (equipe_id) REFERENCES equipes(id),
         UNIQUE(session_id, journee, equipe_id)
@@ -240,6 +182,9 @@ def create_new_schema(conn):
         fiabilite DECIMAL(5,2),
         succes INTEGER,
         source VARCHAR(20) DEFAULT 'PRISMA',
+        technical_details JSONB,
+        ai_analysis TEXT,
+        ai_advice TEXT,
         FOREIGN KEY (session_id) REFERENCES sessions(id),
         FOREIGN KEY (match_id) REFERENCES matches(id)
     );
@@ -325,19 +270,38 @@ def create_new_schema(conn):
         "INSERT INTO prisma_config (key, value_int) VALUES ('ensemble_enabled', 1) ON CONFLICT (key) DO NOTHING;"
     )
 
-    # Table groq_boosts (cache des analyses IA Groq par journée)
+    # Table match_insights (cache des analyses IA par journée)
     cursor.execute(
         """
-    CREATE TABLE IF NOT EXISTS groq_boosts (
+    CREATE TABLE IF NOT EXISTS match_insights (
         id SERIAL PRIMARY KEY,
         session_id INTEGER NOT NULL,
         journee INTEGER NOT NULL,
         equipe_dom_id INTEGER NOT NULL,
         equipe_ext_id INTEGER NOT NULL,
-        boost REAL NOT NULL DEFAULT 0.0,
-        raison TEXT,
+        prognosis VARCHAR(5),
+        confidence REAL,
+        analysis TEXT,
+        advice TEXT,
         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(session_id, journee, equipe_dom_id, equipe_ext_id),
+        FOREIGN KEY (session_id) REFERENCES sessions(id),
+        FOREIGN KEY (equipe_dom_id) REFERENCES equipes(id),
+        FOREIGN KEY (equipe_ext_id) REFERENCES equipes(id)
+    );
+    """
+    )
+    
+    # Table ai_cycle_audits (Audit rétrospectif des performances IA)
+    cursor.execute(
+        """
+    CREATE TABLE IF NOT EXISTS ai_cycle_audits (
+        id SERIAL PRIMARY KEY,
+        session_id INTEGER NOT NULL,
+        start_journee INTEGER NOT NULL,
+        end_journee INTEGER NOT NULL,
+        report_json JSONB,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (session_id) REFERENCES sessions(id)
     );
     """
@@ -352,13 +316,14 @@ def initialiser_db():
     """
     try:
         with get_db_connection() as conn:
+            assert conn is not None, "La connexion à la base de données a échoué"
             create_new_schema(conn)
 
             cursor = conn.cursor()
 
             # Insertion des équipes
             cursor.executemany(
-                "INSERT INTO equipes (nom) VALUES (%s) ON CONFLICT (nom) DO NOTHING", [(e,) for e in EQUIPES]
+                "INSERT INTO equipes (nom) VALUES (%s) ON CONFLICT (nom) DO NOTHING", [(e,) for e in config.EQUIPES]
             )
 
             logger.info("Création des index PostgreSQL...")
@@ -376,7 +341,7 @@ def initialiser_db():
                 "CREATE INDEX IF NOT EXISTS idx_historique_session ON historique_paris(session_id)",
                 "CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status)",
                 "CREATE INDEX IF NOT EXISTS idx_matches_equipes ON matches(session_id, equipe_dom_id, equipe_ext_id)",
-                "CREATE INDEX IF NOT EXISTS idx_groq_boosts_lookup ON groq_boosts(session_id, journee)",
+                "CREATE INDEX IF NOT EXISTS idx_match_insights_lookup ON match_insights(session_id, journee)",
                 
                 # Phase 1: Index sur les Foreign Keys manquants
                 "CREATE INDEX IF NOT EXISTS idx_matches_equipe_dom ON matches(equipe_dom_id)",
@@ -386,13 +351,13 @@ def initialiser_db():
                 "CREATE INDEX IF NOT EXISTS idx_historique_prediction ON historique_paris(prediction_id)",
                 "CREATE INDEX IF NOT EXISTS idx_pari_items_prediction ON pari_multiple_items(prediction_id)",
                 "CREATE INDEX IF NOT EXISTS idx_pari_items_pari ON pari_multiple_items(pari_multiple_id)",
-                "CREATE INDEX IF NOT EXISTS idx_groq_boosts_equipes ON groq_boosts(equipe_dom_id, equipe_ext_id)",
+                "CREATE INDEX IF NOT EXISTS idx_match_insights_equipes ON match_insights(equipe_dom_id, equipe_ext_id)",
                 
                 # Phase 1: Index pour les Requêtes Temporelles
                 "CREATE INDEX IF NOT EXISTS idx_sessions_timestamp_debut ON sessions(timestamp_debut)",
                 "CREATE INDEX IF NOT EXISTS idx_historique_timestamp_pari ON historique_paris(timestamp_pari)",
                 "CREATE INDEX IF NOT EXISTS idx_pari_multiple_timestamp ON pari_multiple(timestamp_pari)",
-                "CREATE INDEX IF NOT EXISTS idx_groq_boosts_timestamp ON groq_boosts(timestamp)",
+                "CREATE INDEX IF NOT EXISTS idx_match_insights_timestamp ON match_insights(timestamp)",
                 
                 # Phase 2: Index pour les Filtrages Métier
                 "CREATE INDEX IF NOT EXISTS idx_historique_strategie ON historique_paris(strategie)",
@@ -418,7 +383,7 @@ def initialiser_db():
 
             conn.commit()
             logger.info(f"{len(indexes)} index créés avec succès.")
-            print("Base de données PostgreSQL initialisée (Architecture par Sessions v4).")
+            logger.info("Base de données PostgreSQL initialisée (Architecture par Sessions v4).")
 
     except Exception as e:
         logger.error(f"Erreur lors de l'initialisation PostgreSQL: {e}", exc_info=True)

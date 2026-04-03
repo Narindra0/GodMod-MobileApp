@@ -209,6 +209,7 @@ def insert_api_matches(matches_data: List[Dict], session_id: int = None) -> int:
                 else:
                     logger.warning(f"Equipes non trouvees: {home_team} vs {away_team}")
 
+        count = 0
         if insert_data:
             cursor.executemany(
                 """

@@ -240,12 +240,23 @@ def start_monitoring(callback_on_new_journee=None, verbose=True):
     try:
         while True:
             try:
+                # Rafraîchissement dynamique de la journée en BDD pour détecter les resets externes
+                last_journee_db = get_max_journee_in_db()
+
                 api_journee, journee_cotes = _get_journee_candidates(last_journee_db)
                 if api_journee is None and journee_cotes is None:
                     consecutive_errors = _handle_missing_api(consecutive_errors)
                     continue
 
                 consecutive_errors = 0
+
+                # Détection d'un reset manuel ou d'une nouvelle saison (hors transition J38->J1 gérée plus bas)
+                if api_journee is not None and api_journee < last_journee_db and last_journee_db < 37:
+                    logger.warning(f"[MONITOR] Reset détecté : API J{api_journee} < BDD J{last_journee_db}")
+                    console.print(create_panel(f"Alerte : Décalage détecté (Reset de date)\nBDD: J{last_journee_db} -> API: J{api_journee}", title="RESET DETECTE", style="yellow"))
+                    # On force la collecte pour la nouvelle journée cible
+                    last_journee_db = _handle_new_journee(api_journee, last_journee_db, callback_on_new_journee)
+                    continue
 
                 if _should_start_new_cycle(journee_cotes, last_journee_db):
                     last_journee_db = _start_new_cycle(last_journee_db, callback_on_new_journee)

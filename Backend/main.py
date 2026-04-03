@@ -72,14 +72,17 @@ def callback_predictions_ia(journee: int):
             logger.warning(f"Erreur check AI toggle: {e}")
 
         if ai_enabled:
-            print_step("Analyse IA Booster (Gemini)")
-            try:
-                active_session = intelligence.get_cached_active_session()
-                # Version asynchrone pour ne pas bloquer
-                ai_booster.analyze_and_store_journee_async(journee_prediction, active_session["id"])
-                print_success("Analyse IA lancée en arrière-plan")
-            except Exception as ai_err:
-                logger.warning(f"[AI-BOOSTER] Erreur lancement asynchrone : {ai_err}")
+            # Audit rétrospectif tous les 10 jours ou à la fin de la session
+            if journee % 10 == 0 or journee == config.SESSION_MAX_DAYS:
+                print_step(f"Initialisation de l'Audit IA (Cycle J{max(1, journee-9)}-J{journee})")
+                try:
+                    active_session = intelligence.get_cached_active_session()
+                    ai_booster.perform_cycle_audit_async(journee, active_session["id"])
+                    print_success(f"Audit du cycle J{journee} lancé en arrière-plan")
+                except Exception as audit_err:
+                    logger.warning(f"[AI-AUDIT] Erreur lancement audit : {audit_err}")
+            else:
+                print_verbose(f"   [IA-BOOSTER] Journée {journee} - En attente du prochain cycle (J10, 20, 30...)")
         else:
             print_warning("Analyse IA Booster DESACTIVEE par utilisateur")
 
@@ -194,61 +197,6 @@ def callback_predictions_ia(journee: int):
     console.print()
     print_info(f"CYCLE J{journee} TERMINE - En attente de J{journee+1}...")
 
-
-def reset_database_api():
-    """Version API de reset_database - utilisée par l'endpoint /admin/reset-data"""
-    from src.core.database import get_db_connection
-
-    try:
-        with get_db_connection(write=True) as conn:
-            cursor = conn.cursor()
-
-            # Lister des tables à vider (dans le bon ordre pour respecter les foreign keys)
-            tables_to_clear = [
-                "pari_multiple_items",
-                "pari_multiple",
-                "historique_paris",
-                "predictions",
-                "classement",
-                "matches",
-                "sessions",
-            ]
-
-            deleted_counts = {}
-
-            for table in tables_to_clear:
-                # Compter avant suppression (PostgreSQL utilise des dictionnaires)
-                cursor.execute("SELECT COUNT(*) FROM %s", (table,))
-                result = cursor.fetchone()
-                count_before = result["count"]
-
-                # Supprimer toutes les données
-                cursor.execute("DELETE FROM %s", (table,))
-
-                deleted_counts[table] = count_before
-
-            # Vérifier que la table equipes est intacte
-            cursor.execute("SELECT COUNT(*) FROM equipes")
-            equipes_result = cursor.fetchone()
-            equipes_count = equipes_result["count"]
-
-            conn.commit()
-
-        total_deleted = sum(deleted_counts.values())
-
-        logger.info(
-            f"Base de données réinitialisée via API: {total_deleted} lignes supprimées, {equipes_count} équipes préservées"
-        )
-
-        return {
-            "deleted_counts": deleted_counts,
-            "total_deleted": total_deleted,
-            "preserved_teams": equipes_count,
-        }
-
-    except Exception as e:
-        logger.error(f"Erreur lors du reset API de la base de données: {e}", exc_info=True)
-        raise
 
 
 def toggle_verbose_mode():

@@ -31,7 +31,6 @@ def _write_wallet(value: int) -> None:
                 "UPDATE prisma_config SET value_int = %s, last_update = CURRENT_TIMESTAMP WHERE key = 'bankroll'",
                 (int(value),),
             )
-            conn.commit()
     except Exception as e:
         logger.error(f"Erreur écriture bankroll PRISMA en DB : {e}", exc_info=True)
 

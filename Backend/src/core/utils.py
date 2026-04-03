@@ -1,3 +1,27 @@
+import json
+from decimal import Decimal
+from datetime import datetime, date
+
+class DecimalEncoder(json.JSONEncoder):
+    """
+    Encodeur JSON personnalisé pour gérer les objets Decimal, datetime et date.
+    """
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return float(obj)
+        if isinstance(obj, (datetime, date)):
+            return obj.isoformat()
+        return super().default(obj)
+
+def safe_json_dumps(obj, **kwargs):
+    """
+    Serialize an object to a JSON formatted string, handling Decimals and datetimes.
+    """
+    if 'cls' not in kwargs:
+        kwargs['cls'] = DecimalEncoder
+    return json.dumps(obj, **kwargs)
+
+
 def _update_config_flag(flag_name, new_value):
     import os
 
@@ -11,12 +35,6 @@ def _update_config_flag(flag_name, new_value):
                 lines[i] = f"{flag_name} = {new_value}\n"
                 updated = True
                 break
-        if not updated:
-            for i, line in enumerate(lines):
-                if line.strip().startswith("# Sélecteurs CSS"):
-                    lines.insert(i, f"{flag_name} = {new_value}\n")
-                    updated = True
-                    break
         if updated:
             with open(config_path, "w", encoding="utf-8") as f:
                 f.writelines(lines)

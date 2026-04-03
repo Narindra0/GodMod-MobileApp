@@ -1,8 +1,8 @@
 {
-  "trained_at": "2026-03-25T16:15:25.097852",
-  "training_samples": 6040,
-  "cv_accuracy": 0.4981788079470199,
-  "cv_std": 0.032364903094658753,
+  "trained_at": "2026-04-03T10:26:41.735276",
+  "training_samples": 3820,
+  "cv_accuracy": 0.49136125654450263,
+  "cv_std": 0.09926472372373342,
   "feature_names": [
     "pts_dom",
     "pts_ext",
@@ -47,101 +47,89 @@
     "force_relative_dom_ext"
   ],
   "feature_importance": {
-    "pts_dom": 3.8062436905916632,
-    "pts_ext": 3.213505339148237,
-    "diff_points": 7.583320875652697,
-    "forme_dom": 3.0780973216379506,
-    "forme_ext": 3.301731877455548,
-    "diff_forme": 3.2081066453792326,
-    "momentum_dom": 3.333301568877403,
-    "momentum_ext": 3.0674886029254775,
-    "diff_momentum": 2.7006251938496915,
-    "instabilite_dom": 3.467946882624884,
-    "instabilite_ext": 2.9869316976902853,
-    "bp_dom": 3.2847023973293523,
-    "bc_dom": 4.129808496258101,
-    "bp_ext": 2.845218216381881,
-    "bc_ext": 3.215283420171877,
-    "diff_attaque": 3.562045570867409,
-    "diff_defense": 3.0085166602032727,
-    "cote_1": 2.997341265975803,
-    "cote_x": 3.535883939751996,
-    "cote_2": 3.291762313416818,
-    "prob_implicite_1": 3.1732593348924794,
-    "prob_implicite_x": 4.222390028448472,
-    "prob_implicite_2": 3.8455430055277984,
-    "ecart_cotes": 3.1537729227911884,
-    "cotes_suspectes": 2.1574512133360186,
-    "session_position": 3.5312735962173534,
-    "momentum5_dom": 3.3044715896561514,
-    "momentum5_ext": 2.921831363330099,
-    "diff_momentum5": 4.07214496961086
+    "pts_dom": 2.94673327277477,
+    "pts_ext": 2.682527432072316,
+    "diff_points": 5.188390996530142,
+    "forme_dom": 3.1538567624481066,
+    "forme_ext": 3.1384352925402266,
+    "diff_forme": 3.6478891551888832,
+    "momentum_dom": 2.9926989960179293,
+    "momentum_ext": 3.0393549802083775,
+    "diff_momentum": 3.402864477245362,
+    "instabilite_dom": 3.8617280334382222,
+    "instabilite_ext": 2.2255604421425215,
+    "bp_dom": 3.1729047857599695,
+    "bc_dom": 3.0631239838209106,
+    "bp_ext": 3.3515795750695814,
+    "bc_ext": 3.2479147245680884,
+    "diff_attaque": 4.447198947084538,
+    "diff_defense": 3.9065198589519454,
+    "cote_1": 3.1269574336963286,
+    "cote_x": 3.0512809719818708,
+    "cote_2": 3.983703170222387,
+    "prob_implicite_1": 3.323692950232012,
+    "prob_implicite_x": 2.975255457856568,
+    "prob_implicite_2": 3.285018933915581,
+    "ecart_cotes": 3.693765499547421,
+    "cotes_suspectes": 3.076223254070597,
+    "session_position": 3.08288229060156,
+    "momentum5_dom": 3.087123762475032,
+    "momentum5_ext": 5.666588671032755,
+    "diff_momentum5": 4.178225888505996
   },
   "label_distribution": {
-    "1": 2834,
-    "X": 1404,
-    "2": 1802
+    "1": 1807,
+    "X": 901,
+    "2": 1112
   },
-  "last_training_session": 35,
-  "last_training_day": 31,
+  "last_training_session": 39,
+  "last_training_day": 16,
   "training_method": "adaptive_session_weighted",
   "session_summary": {
-    "current_session": 35,
-    "sessions_available": 3,
-    "total_matches": 910,
+    "current_session": 39,
+    "sessions_available": 2,
+    "total_matches": 400,
     "session_breakdown": [
       {
-        "session_id": 35,
-        "match_count": 260,
+        "session_id": 39,
+        "match_count": 340,
         "offset": 0,
         "weight": 1.0,
-        "weighted_count": 260
+        "weighted_count": 340
       },
       {
-        "session_id": 34,
-        "match_count": 280,
+        "session_id": 38,
+        "match_count": 60,
         "offset": 1,
         "weight": 0.7,
-        "weighted_count": 196
-      },
-      {
-        "session_id": 33,
-        "match_count": 370,
-        "offset": 2,
-        "weight": 0.4,
-        "weighted_count": 148
+        "weighted_count": 42
       }
     ]
   },
   "complexity_context": {
-    "phase": "end",
-    "current_day": 31,
+    "phase": "mid",
+    "current_day": 16,
     "config_used": {
-      "n_estimators": 150,
-      "max_depth": 4,
-      "learning_rate": 0.1,
-      "subsample": 0.95,
-      "colsample_bytree": 0.95,
-      "min_child_weight": 5,
-      "gamma": 0.5,
-      "reg_alpha": 0.2,
-      "reg_lambda": 3.0,
-      "description": "Minimaliste - ultra-stable",
-      "phase": "end",
-      "current_day": 31
+      "n_estimators": 250,
+      "max_depth": 6,
+      "learning_rate": 0.05,
+      "subsample": 0.85,
+      "colsample_bytree": 0.85,
+      "min_child_weight": 2,
+      "gamma": 0.2,
+      "reg_alpha": 0.05,
+      "reg_lambda": 1.5,
+      "description": "\u00c9quilibr\u00e9 - robustesse et performance",
+      "phase": "mid",
+      "current_day": 16
     }
   },
   "triggers": [
     {
-      "type": "day",
-      "reason": "\u00c9cart de 5 journ\u00e9es (>=5): J31 - J26",
-      "priority": "medium"
-    },
-    {
       "type": "volume",
-      "reason": "Volume donn\u00e9es suffisant: 260 nouveaux matchs (>= 50)",
+      "reason": "Volume donn\u00e9es suffisant: 340 nouveaux matchs (>= 50)",
       "priority": "low"
     }
   ],
-  "primary_trigger_reason": "\u00c9cart de 5 journ\u00e9es (>=5): J31 - J26"
+  "primary_trigger_reason": "Volume donn\u00e9es suffisant: 340 nouveaux matchs (>= 50)"
 }
