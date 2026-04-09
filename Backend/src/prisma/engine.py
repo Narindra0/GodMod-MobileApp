@@ -1,4 +1,4 @@
-from . import analyzers
+from prisma import analyzers
 import logging
 
 logger = logging.getLogger(__name__)
@@ -70,7 +70,8 @@ def calculer_score_prisma_v2(data, conn=None):
     Version hybride : PRISMA classique + Ensemble ML (XGBoost + CatBoost).
     L'Ensemble est utilisé si activé par l'utilisateur dans l'interface.
     """
-    from ..core import config
+    from core import config
+    from core.database import get_db_connection
     
     # 1. Obtenir le résultat classique pour les filtres de rejet et le fallback
     classic_res, classic_score = calculer_score_prisma(data)
@@ -81,15 +82,7 @@ def calculer_score_prisma_v2(data, conn=None):
 
     # 2. Vérifier si l'Ensemble ML est activé (dynamiquement via DB)
     ensemble_enabled = getattr(config, 'PRISMA_XGBOOST_ENABLED', False)
-    db_conn = conn
-    
     try:
-        from src.core.database import get_db_connection
-        if db_conn is None:
-            db_conn = get_db_connection()
-            # Note: Si on instancie db_conn ici, il faudrait le fermer.
-            # Mais c'est plus propre d'utiliser temporairement conn_check pour le read
-            
         with get_db_connection() as conn_check:
             with conn_check.cursor() as cur:
                 cur.execute("SELECT value_int FROM prisma_config WHERE key = 'ensemble_enabled'")
@@ -102,9 +95,8 @@ def calculer_score_prisma_v2(data, conn=None):
     # 2. Tentative de prédiction via Ensemble ML
     if ensemble_enabled:
         try:
-            from . import ensemble
-            # Ajouter la connexion pour features avancées
-            from ..core.database import get_db_connection
+            from prisma import ensemble
+            # Utiliser la connexion déjà importée
             with get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT id FROM sessions WHERE status = 'ACTIVE' LIMIT 1")
@@ -120,8 +112,8 @@ def calculer_score_prisma_v2(data, conn=None):
                 
                 if poisson_enabled:
                     try:
-                        from . import poisson
-                        from src.core.session_manager import get_active_session
+                        from prisma import poisson
+                        from core.session_manager import get_active_session
                         
                         with get_db_connection() as local_conn:
                             session = get_active_session(local_conn)

@@ -49,7 +49,7 @@ def _generer_pari_internal(conn, journee, selection, session_id, active_session,
     if strategie == 'PRISMA' and is_prisma_stop_loss_active():
         logger.warning(f"[STOP-LOSS] Bankroll PRISMA sous le seuil. Pari multiple refusé.")
         return None
-    elif strategie == 'ZEUS' and zeus_finance.is_zeus_stop_loss_active(session_id, conn):
+    elif strategie == 'ZEUS' and zeus_finance.is_zeus_stop_loss_active(conn=conn):
         logger.warning(f"[STOP-LOSS] Bankroll ZEUS sous le seuil. Pari multiple refusé.")
         return None
 
@@ -89,7 +89,7 @@ def _generer_pari_internal(conn, journee, selection, session_id, active_session,
             f_ok, nouveau_bankroll = deduct_prisma_funds(mise_ar)
             if not f_ok: return None
         else: # ZEUS
-            bankroll = zeus_finance.get_zeus_bankroll(session_id, conn)
+            bankroll = zeus_finance.get_zeus_bankroll(conn=conn)
             mise_ar = config.MONTANT_FIXE_MULTIPLE # Par défaut pour ZEUS combiné
             if bankroll < mise_ar:
                 logger.warning(f"Fonds ZEUS insuffisants : {bankroll} Ar < {mise_ar} Ar")
@@ -151,7 +151,7 @@ def _valider_paris_multiples_internal(conn, session_id):
         if strat == 'PRISMA':
             bankroll = get_prisma_bankroll()
         else: # ZEUS
-            bankroll = zeus_finance.get_zeus_bankroll(session_id, conn)
+            bankroll = zeus_finance.get_zeus_bankroll(conn=conn)
 
         cursor.execute(
             """
@@ -176,10 +176,24 @@ def _valider_paris_multiples_internal(conn, session_id):
             nouveau_bankroll = bankroll # Déjà déduit à la création
         
         if strat == 'PRISMA':
-            update_prisma_bankroll(session_id, nouveau_bankroll, mise, resultat, cote)
+            # Fix: Mise à jour du bankroll PRISMA directement dans la même transaction
+            # (update_prisma_bankroll ouvrait une 2e connexion → risque de deadlock)
+            cursor.execute(
+                "INSERT INTO prisma_config (key, value_int, last_update) "
+                "VALUES ('bankroll_prisma', %s, CURRENT_TIMESTAMP) "
+                "ON CONFLICT (key) DO UPDATE SET value_int = EXCLUDED.value_int, last_update = CURRENT_TIMESTAMP",
+                (int(nouveau_bankroll),)
+            )
             delta_score = config.PRISMA_POINTS_VICTOIRE if tout_gagne else config.PRISMA_POINTS_DEFAITE
             cursor.execute("UPDATE sessions SET score_prisma = score_prisma + %s WHERE id = %s", (delta_score, session_id))
         else: # ZEUS
+            # Mise à jour du bankroll ZEUS dans la même transaction
+            cursor.execute(
+                "INSERT INTO prisma_config (key, value_int, last_update) "
+                "VALUES ('bankroll_zeus', %s, CURRENT_TIMESTAMP) "
+                "ON CONFLICT (key) DO UPDATE SET value_int = EXCLUDED.value_int, last_update = CURRENT_TIMESTAMP",
+                (int(nouveau_bankroll),)
+            )
             # Log final result in historique_paris
             from ..zeus.database.queries import PariRecord, enregistrer_pari
             enregistrer_pari(PariRecord(

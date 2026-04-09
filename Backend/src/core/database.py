@@ -205,7 +205,8 @@ def create_new_schema(conn):
         ai_analysis TEXT,
         ai_advice TEXT,
         FOREIGN KEY (session_id) REFERENCES sessions(id),
-        FOREIGN KEY (match_id) REFERENCES matches(id)
+        FOREIGN KEY (match_id) REFERENCES matches(id),
+        UNIQUE(session_id, match_id, source)
     );
     """
     )
@@ -280,9 +281,12 @@ def create_new_schema(conn):
     """
     )
 
-    # Initialisation du bankroll PRISMA et des configs par défaut si absents
+    # Initialisation des bankrolls séparés et configs par défaut si absents
     cursor.execute(
-        "INSERT INTO prisma_config (key, value_int) VALUES ('bankroll', 20000) ON CONFLICT (key) DO NOTHING;"
+        "INSERT INTO prisma_config (key, value_int) VALUES ('bankroll_prisma', 20000) ON CONFLICT (key) DO NOTHING;"
+    )
+    cursor.execute(
+        "INSERT INTO prisma_config (key, value_int) VALUES ('bankroll_zeus', 20000) ON CONFLICT (key) DO NOTHING;"
     )
     cursor.execute("INSERT INTO prisma_config (key, value_int) VALUES ('ai_enabled', 1) ON CONFLICT (key) DO NOTHING;")
     cursor.execute(
@@ -321,6 +325,53 @@ def create_new_schema(conn):
         end_journee INTEGER NOT NULL,
         report_json JSONB,
         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (session_id) REFERENCES sessions(id)
+    );
+    """
+    )
+
+    # Table risk_engine_logs (Logs des validations du Risk Engine)
+    cursor.execute(
+        """
+    CREATE TABLE IF NOT EXISTS risk_engine_logs (
+        id SERIAL PRIMARY KEY,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        agent VARCHAR(20) NOT NULL,
+        session_id INTEGER,
+        bet_type VARCHAR(10),
+        amount INTEGER,
+        odds FLOAT,
+        confidence FLOAT,
+        validation_status VARCHAR(20),
+        rejection_reason TEXT,
+        resultat VARCHAR(50),
+        FOREIGN KEY (session_id) REFERENCES sessions(id)
+    );
+    """
+    )
+
+    # Table agent_cooldowns (Cooldowns entre paris par agent)
+    cursor.execute(
+        """
+    CREATE TABLE IF NOT EXISTS agent_cooldowns (
+        agent VARCHAR(20) PRIMARY KEY,
+        last_bet_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        bets_today INTEGER DEFAULT 0,
+        last_reset DATE DEFAULT CURRENT_DATE
+    );
+    """
+    )
+
+    # Table prisma_safe_mode (Statut du mode SAFE de PRISMA)
+    cursor.execute(
+        """
+    CREATE TABLE IF NOT EXISTS prisma_safe_mode (
+        id SERIAL PRIMARY KEY,
+        session_id INTEGER NOT NULL,
+        active BOOLEAN DEFAULT FALSE,
+        consecutive_losses INTEGER DEFAULT 0,
+        activated_at TIMESTAMP,
+        deactivated_at TIMESTAMP,
         FOREIGN KEY (session_id) REFERENCES sessions(id)
     );
     """
@@ -395,6 +446,17 @@ def initialiser_db():
                 "CREATE INDEX IF NOT EXISTS idx_historique_session_profit ON historique_paris(session_id, profit_net)",
                 "CREATE INDEX IF NOT EXISTS idx_classement_points ON classement(points)",
                 "CREATE INDEX IF NOT EXISTS idx_predictions_fiabilite ON predictions(fiabilite)",
+                
+                # Fix #9: Contrainte d'unicité sur les prédictions (anti-doublons)
+                # Empêche PRISMA standard et amélioré de créer 2 prédictions pour le même match
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_predictions_unique_source ON predictions(session_id, match_id, source)",
+                
+                # Index pour tables Risk Engine
+                "CREATE INDEX IF NOT EXISTS idx_risk_engine_logs_timestamp ON risk_engine_logs(timestamp)",
+                "CREATE INDEX IF NOT EXISTS idx_risk_engine_logs_agent ON risk_engine_logs(agent)",
+                "CREATE INDEX IF NOT EXISTS idx_risk_engine_logs_status ON risk_engine_logs(validation_status)",
+                "CREATE INDEX IF NOT EXISTS idx_prisma_safe_mode_session ON prisma_safe_mode(session_id)",
+                "CREATE INDEX IF NOT EXISTS idx_prisma_safe_mode_active ON prisma_safe_mode(active)",
             ]
 
             for index_sql in indexes:

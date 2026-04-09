@@ -1,0 +1,240 @@
+{
+  "metadata": {
+    "audit_timestamp": "2026-04-07T14:46:53.090761",
+    "total_matches": 366,
+    "audit_duration_ms": 60.794000000000004
+  },
+  "distribution_analysis": {
+    "distribution": {
+      "1": {
+        "count": 170,
+        "percentage": 46.44808743169399
+      },
+      "X": {
+        "count": 86,
+        "percentage": 23.497267759562842
+      },
+      "2": {
+        "count": 110,
+        "percentage": 30.05464480874317
+      }
+    },
+    "total_matches": 366,
+    "chi2_test": 30.688524590163933,
+    "is_balanced": false,
+    "deviation_from_uniform": {
+      "1": 13.118087431693993,
+      "X": -9.832732240437156,
+      "2": -3.2753551912568284
+    }
+  },
+  "odds_correlation": {
+    "odds_accuracy": 0.5437158469945356,
+    "odds_accuracy_percentage": 54.37158469945356,
+    "is_highly_predictive": true,
+    "brier_score": 0.1879364305917112,
+    "brier_interpretation": "good",
+    "calibration_by_probability": {
+      "0.0": {
+        "count": 32,
+        "avg_predicted": 0.0760311419746172,
+        "avg_actual": 0.03125,
+        "calibration_error": 0.0447811419746172
+      },
+      "0.1": {
+        "count": 218,
+        "avg_predicted": 0.1590349424195585,
+        "avg_actual": 0.1559633027522936,
+        "calibration_error": 0.003071639667264925
+      },
+      "0.2": {
+        "count": 388,
+        "avg_predicted": 0.24495561588965317,
+        "avg_actual": 0.2603092783505155,
+        "calibration_error": 0.01535366246086231
+      },
+      "0.3": {
+        "count": 126,
+        "avg_predicted": 0.34318442832100754,
+        "avg_actual": 0.3333333333333333,
+        "calibration_error": 0.009851094987674225
+      },
+      "0.4": {
+        "count": 105,
+        "avg_predicted": 0.44686610437462254,
+        "avg_actual": 0.3904761904761905,
+        "calibration_error": 0.056389913898432065
+      },
+      "0.5": {
+        "count": 102,
+        "avg_predicted": 0.546077045051696,
+        "avg_actual": 0.5784313725490197,
+        "calibration_error": 0.0323543274973237
+      },
+      "0.6": {
+        "count": 75,
+        "avg_predicted": 0.6483643902597588,
+        "avg_actual": 0.6133333333333333,
+        "calibration_error": 0.0350310569264255
+      },
+      "0.7": {
+        "count": 39,
+        "avg_predicted": 0.7373658675844538,
+        "avg_actual": 0.7435897435897436,
+        "calibration_error": 0.006223876005289841
+      },
+      "0.8": {
+        "count": 13,
+        "avg_predicted": 0.8159978012178578,
+        "avg_actual": 1.0,
+        "calibration_error": 0.1840021987821422
+      }
+    },
+    "recommendation": "HIGH_PRIORITY"
+  },
+  "temporal_patterns": {
+    "early_phase": {
+      "journees": "1-10",
+      "match_count": 100,
+      "distribution": {
+        "1": 40.0,
+        "X": 24.0,
+        "2": 36.0
+      }
+    },
+    "mid_phase": {
+      "journees": "11-25",
+      "match_count": 196,
+      "distribution": {
+        "1": 51.02040816326531,
+        "X": 25.0,
+        "2": 23.97959183673469
+      }
+    },
+    "late_phase": {
+      "journees": "26+",
+      "match_count": 70,
+      "distribution": {
+        "1": 42.857142857142854,
+        "X": 18.571428571428573,
+        "2": 38.57142857142858
+      }
+    },
+    "temporal_variance": {
+      "home_advantage_early_vs_late": -2.857142857142854,
+      "draw_variance": 6.428571428571427
+    }
+  },
+  "sequential_patterns": {
+    "run_statistics": {
+      "1": {
+        "avg_run_length": 1.7708333333333333,
+        "max_run_length": 5,
+        "total_runs": 96
+      },
+      "X": {
+        "avg_run_length": 1.2835820895522387,
+        "max_run_length": 3,
+        "total_runs": 67
+      },
+      "2": {
+        "avg_run_length": 1.4285714285714286,
+        "max_run_length": 4,
+        "total_runs": 77
+      }
+    },
+    "max_consecutive": {
+      "1": 5,
+      "X": 3,
+      "2": 4
+    },
+    "alternation_rate": 0.6528925619834711,
+    "is_random_like": false,
+    "sequential_memory_detected": true
+  },
+  "odds_ranges": {
+    "favorite": {
+      "match_count": 111,
+      "percentage_of_total": 30.327868852459016,
+      "distribution": {
+        "1": 64.86486486486487,
+        "X": 20.72072072072072,
+        "2": 14.414414414414415
+      },
+      "favorite_accuracy": 73.87387387387388,
+      "avg_min_odds": 1.349009009009009
+    },
+    "likely": {
+      "match_count": 191,
+      "percentage_of_total": 52.18579234972678,
+      "distribution": {
+        "1": 42.40837696335078,
+        "X": 21.465968586387437,
+        "2": 36.12565445026178
+      },
+      "favorite_accuracy": 50.78534031413613,
+      "avg_min_odds": 1.836910994764398
+    },
+    "balanced": {
+      "match_count": 64,
+      "percentage_of_total": 17.48633879781421,
+      "distribution": {
+        "1": 26.5625,
+        "X": 34.375,
+        "2": 39.0625
+      },
+      "favorite_accuracy": 32.8125,
+      "avg_min_odds": 2.3825
+    }
+  },
+  "anomalies": [
+    {
+      "type": "high_surprise_rate",
+      "count": 27,
+      "percentage": 7.377049180327869,
+      "severity": "medium"
+    },
+    {
+      "type": "biased_session",
+      "session_id": 38,
+      "dominant_result": "1",
+      "dominant_percentage": 60.0,
+      "severity": "medium"
+    }
+  ],
+  "value_opportunities": {
+    "opportunities": [],
+    "total_opportunities": 0,
+    "has_value_potential": false
+  },
+  "feature_candidates": [
+    {
+      "name": "odds_implied_weighted",
+      "type": "feature_engineering",
+      "priority": "HIGH",
+      "description": "Pondérer les features par la fiabilité des cotes implicites",
+      "expected_impact": "+3-5% accuracy"
+    },
+    {
+      "name": "run_detection_features",
+      "type": "feature_engineering",
+      "priority": "MEDIUM",
+      "description": "Détecter les séries en cours (VVV, DDD) comme features",
+      "expected_impact": "+1-3% accuracy"
+    },
+    {
+      "name": "odds_range_classifier",
+      "type": "feature_engineering",
+      "priority": "MEDIUM",
+      "description": "Classifier le match selon tranche de cotes (favorite/likely/etc)",
+      "expected_impact": "+2-3% accuracy"
+    },
+    {
+      "name": "market_anomaly_flag",
+      "type": "feature_engineering",
+      "priority": "LOW",
+      "description": "Flag si le match présente des cotes anormales",
+      "expected_impact": "+1-2% accuracy"
+    }
+  ]
+}

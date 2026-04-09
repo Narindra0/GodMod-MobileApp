@@ -5,26 +5,15 @@ from .session_manager import get_active_session
 
 logger = logging.getLogger(__name__)
 
-def get_zeus_bankroll(session_id=None, conn=None):
-    """Récupère le capital actuel de ZEUS pour la session."""
-    if session_id is None:
-        active_session = get_active_session(conn=conn)
-        session_id = active_session['id']
-    
+def get_zeus_bankroll(conn=None):
+    """Récupère le capital global actuel de ZEUS."""
     def _read(c):
         cursor = c.cursor()
-        cursor.execute("""
-            SELECT bankroll_apres FROM historique_paris 
-            WHERE session_id = %s AND strategie = 'ZEUS' 
-            ORDER BY id_pari DESC LIMIT 1
-        """, (session_id,))
+        cursor.execute("SELECT value_int FROM prisma_config WHERE key = 'bankroll_zeus'")
         row = cursor.fetchone()
         if row:
-            return int(row['bankroll_apres'])
-        
-        cursor.execute("SELECT capital_initial FROM sessions WHERE id = %s", (session_id,))
-        s_row = cursor.fetchone()
-        return int(s_row['capital_initial']) if s_row else config.DEFAULT_BANKROLL
+            return int(row["value_int"])
+        return config.DEFAULT_BANKROLL
 
     if conn:
         return _read(conn)
@@ -34,9 +23,26 @@ def get_zeus_bankroll(session_id=None, conn=None):
     except Exception:
         return config.DEFAULT_BANKROLL
 
-def is_zeus_stop_loss_active(session_id=None, conn=None):
+def update_zeus_bankroll(nouveau_bankroll, conn=None):
+    """Met à jour le capital global de ZEUS."""
+    def _write(c):
+        cursor = c.cursor()
+        cursor.execute(
+            "INSERT INTO prisma_config (key, value_int, last_update) VALUES ('bankroll_zeus', %s, CURRENT_TIMESTAMP) "
+            "ON CONFLICT (key) DO UPDATE SET value_int = EXCLUDED.value_int, last_update = CURRENT_TIMESTAMP",
+            (int(nouveau_bankroll),)
+        )
+
+    if conn:
+        _write(conn)
+    else:
+        with get_db_connection(write=True) as conn:
+            _write(conn)
+    logger.info(f"Bankroll ZEUS (Global) mis à jour : {nouveau_bankroll} Ar")
+
+def is_zeus_stop_loss_active(conn=None):
     """Vérifie si le stop-loss ZEUS est activé."""
-    return get_zeus_bankroll(session_id, conn) < config.BANKROLL_STOP_LOSS
+    return get_zeus_bankroll(conn) < config.BANKROLL_STOP_LOSS
 
 def record_zeus_combined_bet(session_id, journee, mise, bankroll_apres, conn):
     """Enregistre le mouvement de bankroll initial pour un combiné ZEUS."""
@@ -57,4 +63,6 @@ def record_zeus_combined_bet(session_id, journee, mise, bankroll_apres, conn):
         action_id=0,
         strategie='ZEUS'
     )
+    # On met aussi à jour le portefeuille global ici par sécurité (déduction de la mise)
+    update_zeus_bankroll(bankroll_apres, conn=conn)
     return enregistrer_pari(record, conn)

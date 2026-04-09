@@ -1,6 +1,7 @@
 {
-  "trained_at": "2026-04-03T10:27:11.971447",
-  "training_samples": 3820,
+  "trained_at": "2026-04-07T14:47:40.735381",
+  "features_count": 59,
+  "training_samples": 4815,
   "feature_names": [
     "pts_dom",
     "pts_ext",
@@ -42,40 +43,65 @@
     "zone_classement_dom",
     "zone_classement_ext",
     "pression_fin_session",
-    "force_relative_dom_ext"
+    "force_relative_dom_ext",
+    "overround",
+    "entropy",
+    "odds_spread",
+    "odds_ratio",
+    "market_confidence",
+    "market_anomaly_score",
+    "prob_deviation_1",
+    "prob_deviation_x",
+    "prob_deviation_2",
+    "value_score_1",
+    "value_score_x",
+    "value_score_2",
+    "max_value_score",
+    "kelly_fraction_1",
+    "kelly_fraction_x",
+    "kelly_fraction_2",
+    "odds_range_class",
+    "is_balanced_market"
   ],
   "label_distribution": {
-    "1": 1807,
-    "X": 901,
-    "2": 1112
+    "1": 2274,
+    "X": 1089,
+    "2": 1452
   },
-  "last_training_session": 39,
-  "last_training_day": 16,
+  "last_training_session": 40,
+  "last_training_day": 9,
   "training_method": "adaptive_session_weighted",
   "session_summary": {
-    "current_session": 39,
-    "sessions_available": 2,
-    "total_matches": 400,
+    "current_session": 40,
+    "sessions_available": 3,
+    "total_matches": 675,
     "session_breakdown": [
       {
-        "session_id": 39,
-        "match_count": 340,
+        "session_id": 40,
+        "match_count": 90,
         "offset": 0,
         "weight": 1.0,
-        "weighted_count": 340
+        "weighted_count": 90
+      },
+      {
+        "session_id": 39,
+        "match_count": 525,
+        "offset": 1,
+        "weight": 0.7,
+        "weighted_count": 367
       },
       {
         "session_id": 38,
         "match_count": 60,
-        "offset": 1,
-        "weight": 0.7,
-        "weighted_count": 42
+        "offset": 2,
+        "weight": 0.4,
+        "weighted_count": 24
       }
     ]
   },
   "complexity_context": {
     "phase": "mid",
-    "current_day": 16,
+    "current_day": 9,
     "config_used": {
       "iterations": 250,
       "depth": 7,
@@ -86,15 +112,15 @@
       "random_strength": 0.8,
       "description": "\u00c9quilibr\u00e9 - performance stable",
       "phase": "mid",
-      "current_day": 16
+      "current_day": 9
     }
   },
   "triggers": [
     {
       "type": "volume",
-      "reason": "Volume donn\u00e9es suffisant: 340 nouveaux matchs (>= 50)",
+      "reason": "Volume donn\u00e9es suffisant: 90 nouveaux matchs (>= 50)",
       "priority": "low"
     }
   ],
-  "primary_trigger_reason": "Volume donn\u00e9es suffisant: 340 nouveaux matchs (>= 50)"
+  "primary_trigger_reason": "Volume donn\u00e9es suffisant: 90 nouveaux matchs (>= 50)"
 }

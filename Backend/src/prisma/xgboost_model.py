@@ -3,12 +3,13 @@ PRISMA XGBoost — Model Management Module
 Entraînement, chargement, prédiction et ré-entraînement automatique du modèle XGBoost.
 """
 import os
+import sys
 import json
 import logging
 import numpy as np
 from datetime import datetime
 
-from . import xgboost_features
+from prisma import xgboost_features
 
 logger = logging.getLogger(__name__)
 
@@ -18,9 +19,28 @@ _model_metadata = None
 
 
 def _get_model_dir():
-    """Retourne le répertoire de stockage du modèle."""
-    from ..core import config
-    return os.path.join(config.BASE_DIR, 'models', 'prisma')
+    """Retourne le répertoire de stockage du modèle avec détection robuste."""
+    # 1. Tenter via core.config pour la cohérence globale
+    try:
+        try:
+            from core import config
+        except ImportError:
+            # Tenter avec un path local si on est dans un sous-répertoire
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+            from core import config
+        
+        if hasattr(config, 'BASE_DIR'):
+            path = os.path.join(config.BASE_DIR, 'models', 'prisma')
+            if os.path.exists(path):
+                return path
+    except Exception:
+        pass
+    
+    # 2. Fallback robuste : basé sur la position physique de ce fichier
+    # f:\...\Backend\src\prisma\xgboost_model.py -> f:\...\Backend\models\prisma
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    fallback_path = os.path.abspath(os.path.join(this_dir, '..', '..', 'models', 'prisma'))
+    return fallback_path
 
 
 def _get_model_path():
@@ -45,7 +65,7 @@ def load_model():
     
     model_path = _get_model_path()
     if not os.path.exists(model_path):
-        logger.info("[XGBOOST] Aucun modèle trouvé sur le disque.")
+        logger.info(f"[XGBOOST] Aucun modèle trouvé à: {model_path}")
         return None
     
     try:
@@ -71,7 +91,7 @@ def load_model():
 def train_model(conn, force=False, decision=None):
     """Entraîne le modèle XGBoost avec complexité adaptative et triggers avancés."""
     global _model, _model_metadata
-    from ..core import config
+    from core import config
 
     try:
         import xgboost as xgb
@@ -80,12 +100,8 @@ def train_model(conn, force=False, decision=None):
         logger.warning("[XGBOOST] Bibliothèques requises manquantes. pip install xgboost scikit-learn")
         return False
 
-    # Importer les modules avancés
-    from .session_weighted_training import extract_weighted_training_data, get_training_summary
-    from .adaptive_complexity import get_training_context, log_complexity_summary
-    
     # Récupérer le contexte d'entraînement
-    from src.core.session_manager import get_active_session
+    from core.session_manager import get_active_session
     current_session = get_active_session(conn)
     if not current_session:
         logger.warning("[XGBOOST] Impossible de déterminer la session actuelle")
@@ -96,7 +112,7 @@ def train_model(conn, force=False, decision=None):
     
     # Utiliser la décision fournie ou évaluer les triggers si nécessaire
     if decision is None:
-        from .training_triggers import should_retrain_models
+        from prisma.training_triggers import should_retrain_models
         decisions = should_retrain_models(conn, current_session_id, current_day)
         xgb_decision = decisions['xgboost']
     else:
@@ -105,27 +121,37 @@ def train_model(conn, force=False, decision=None):
     if not force and not xgb_decision['should_train']:
         logger.info(f"[XGBOOST] Pas de réentraînement nécessaire: {xgb_decision['primary_reason']}")
         return False
-    
+
     # Logger la décision
-    from .training_triggers import TrainingTrigger
+    from prisma.training_triggers import TrainingTrigger
     trigger_manager = TrainingTrigger(conn)
     trigger_manager.log_training_decision(xgb_decision)
     
     # Récupérer le contexte de complexité adaptative
+    from prisma.adaptive_complexity import get_training_context, log_complexity_summary
     context = get_training_context(conn, current_session_id)
     log_complexity_summary(context)
     
     # Extraire les données pondérées
+    from prisma.session_weighted_training import extract_weighted_training_data, get_training_summary
     X, y = extract_weighted_training_data(conn, current_session_id, min_matches=200)
     if X is None or len(y) < 200:
         actual = 0 if y is None else len(y)
         logger.info(f"[XGBOOST] Pas assez de données pondérées ({actual}/200).")
-        return False
+    # FORÇAGE TEMPORAIRE: Si le modèle existant a 31 features, on doit ré-entraîner pour passer à 57
+    if not force:
+        model_meta = get_model_info()
+        if model_meta and model_meta.get('features_count', 0) == 31:
+            logger.info("[XGBOOST] 🔄 Détection d'un ancien modèle (31 features). Forçage du ré-entraînement vers 57 features...")
+            force = True
     
     # XGBoost ne supporte pas les chaînes. On garde seulement les features numériques.
     if hasattr(X, 'iloc'):
-        X = X.iloc[:, :31].values.astype('float32')  # Garder seulement les 31 premières features
+        feature_cols = [col for col in X.columns if col not in ['forme_raw_dom', 'forme_raw_ext']]
+        X = X[feature_cols].values.astype('float32')
     
+    from prisma.training_status import status_manager
+    status_manager.update_model("xgboost", status="training", progress=10)
     logger.info(f"[XGBOOST] Début de l'entraînement adaptatif sur {len(y)} échantillons...")
     
     # Configuration XGBoost adaptative
@@ -146,11 +172,13 @@ def train_model(conn, force=False, decision=None):
         eval_metric='mlogloss'
     )
     
+    status_manager.update_model("xgboost", status="training", progress=30)
     # Validation croisée
     cv_scores = cross_val_score(model, X, y, cv=5, scoring='accuracy')
     cv_accuracy = cv_scores.mean()
     cv_std = cv_scores.std()
     
+    status_manager.update_model("xgboost", status="training", progress=80, accuracy=float(cv_accuracy))
     logger.info(f"[XGBOOST] CV Accuracy: {cv_accuracy:.4f} (+/- {cv_std:.4f})")
     
     # Entraînement final
@@ -178,6 +206,7 @@ def train_model(conn, force=False, decision=None):
     # Métadonnées enrichies
     metadata = {
         'trained_at': datetime.now().isoformat(),
+        'features_count': X.shape[1],
         'training_samples': len(y),
         'cv_accuracy': cv_accuracy,
         'cv_std': cv_std,
@@ -236,7 +265,7 @@ def predict_match(features) -> dict:
         'probabilities' (dict: {1: float, X: float, 2: float})
         ou None si le modèle n'est pas prêt.
     """
-    from . import xgboost_features
+    from prisma import xgboost_features
     
     model = load_model()
     if model is None:
@@ -244,7 +273,10 @@ def predict_match(features) -> dict:
     
     try:
         # Reshape pour une prédiction unique
-        X = features.reshape(1, -1)
+        # Conversion en DataFrame pour filtrer les colonnes si nécessaire (mais 'features' est déjà numérique à 57 colonnes)
+        import pandas as pd
+        # Utiliser NUMERIC_FEATURE_NAMES car extract_features(as_dataframe=False) retourne 57 éléments
+        X = pd.DataFrame(features.reshape(1, -1), columns=xgboost_features.NUMERIC_FEATURE_NAMES)
         
         # Probabilités brutes pour chaque classe
         raw_probas = model.predict_proba(X)[0]
@@ -268,6 +300,12 @@ def predict_match(features) -> dict:
                 '2': float(probas[2]),
             }
         }
+    except ValueError as e:
+        if "Feature shape mismatch" in str(e):
+            logger.warning("[XGBOOST] 🔄 Mismatch structure détecté (31 vs 57). Invalidation du cache...")
+            invalidate_model()
+        logger.error(f"[XGBOOST] Erreur de prédiction structurelle: {e}")
+        return None
     except Exception as e:
         logger.error(f"[XGBOOST] Erreur de prédiction: {e}", exc_info=True)
         return None
@@ -297,8 +335,14 @@ def get_model_info() -> dict:
 
 
 def invalidate_model():
-    """Force le rechargement du modèle au prochain appel."""
+    """Force le rechargement du modèle au prochain appel en le supprimant du disque."""
     global _model, _model_metadata
     _model = None
     _model_metadata = None
-    logger.info("[XGBOOST] Cache modèle invalidé.")
+    try:
+        model_p = _get_model_path()
+        if os.path.exists(model_p):
+            os.remove(model_p)
+    except Exception as e:
+        logger.error(f"[XGBOOST] Erreur suppression disque: {e}")
+    logger.info("[XGBOOST] Cache modèle invalidé et supprimé du disque.")

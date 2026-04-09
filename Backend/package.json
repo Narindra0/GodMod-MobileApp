@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "@heyputer/puter.js": "^2.2.14",
+    "dotenv": "^17.4.0"
+  }
+}

@@ -13,7 +13,9 @@ from ..zeus.models.inference import get_zeus_model, predire_pari_zeus, formater_
 from ..zeus.database.queries import get_matches_for_journee, enregistrer_pari, valider_paris_zeus, PariRecord
 from . import multiple_bets
 from ..core.console import console, print_verbose
-from ..core.prisma_finance import is_prisma_stop_loss_active
+from ..core.zeus_finance import get_zeus_bankroll, update_zeus_bankroll
+from ..core.prisma_finance import get_prisma_bankroll, is_prisma_stop_loss_active
+from ..core.risk_engine import get_risk_engine, BetRequest, ValidationStatus
 from ..core.utils import safe_json_dumps
 
 logger = logging.getLogger(__name__)
@@ -181,14 +183,20 @@ def _selectionner_meilleurs_matchs_internal(conn, session_id, journee):
                 'fiabilite': conf
             })
     for p in predictions:
-        cursor.execute("INSERT INTO predictions (session_id, match_id, prediction, fiabilite, source) VALUES (%s, %s, %s, %s, %s)",
-                     (session_id, p['match_id'], p['prediction'], p['fiabilite'], 'PRISMA'))
+        cursor.execute("""
+            INSERT INTO predictions (session_id, match_id, prediction, fiabilite, source)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (session_id, match_id, source) DO UPDATE SET
+                prediction = EXCLUDED.prediction,
+                fiabilite = EXCLUDED.fiabilite
+        """, (session_id, p['match_id'], p['prediction'], p['fiabilite'], 'PRISMA'))
     return predictions
 
 def selectionner_meilleurs_matchs_ameliore(journee, conn=None):
     _reload_config()
-    if journee < 4:
-        print_verbose(f"Info : Journée {journee} < 4. Pas assez de données.")
+    min_journee = getattr(config, 'PRISMA_AMELIORE_MIN_JOURNEE', 4)
+    if journee < min_journee:
+        print_verbose(f"Info : Journée {journee} < {min_journee} (seuil PRISMA amélioré). Pas assez de données.")
         return []
     active_session = get_active_session(conn=conn)
     session_id = active_session['id']
@@ -262,73 +270,99 @@ def _selectionner_meilleurs_matchs_ameliore_internal(conn, session_id, journee):
                 })
     final_selection = prisma_selection.filtrer_meilleurs_matchs(raw_predictions, config.MAX_PREDICTIONS_PAR_JOURNEE)
     
-    from src.core.prisma_finance import deduct_prisma_funds, get_prisma_bankroll
+    from core.prisma_finance import deduct_prisma_funds, get_prisma_bankroll
 
+    # Phase 2 : Enregistrement des prédictions DB
     for p in final_selection:
-        # 1. Insert into predictions
         tech_json_str = safe_json_dumps(p.get('meta', {}))
         
-        cursor.execute(
-            "INSERT INTO predictions (session_id, match_id, prediction, fiabilite, source, technical_details, ai_analysis, ai_advice) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
-            (session_id, p['match_id'], p['prediction'], p['fiabilite'], 'PRISMA', tech_json_str, None, None)
-        )
+        cursor.execute("""
+            INSERT INTO predictions (session_id, match_id, prediction, fiabilite, source, technical_details, ai_analysis, ai_advice)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (session_id, match_id, source) DO UPDATE SET
+                prediction = EXCLUDED.prediction,
+                fiabilite = EXCLUDED.fiabilite,
+                technical_details = EXCLUDED.technical_details,
+                ai_analysis = EXCLUDED.ai_analysis,
+                ai_advice = EXCLUDED.ai_advice
+            RETURNING id
+        """, (session_id, p['match_id'], p['prediction'], p['fiabilite'], 'PRISMA', tech_json_str, None, None))
         pred_id = cursor.fetchone()['id']
         p['id'] = pred_id
 
-        # 2. Place Simple Bet for PRISMA
-        # On utilise Kelly si activé et qu'on a des probabilités ML dispo
-        if getattr(config, 'PRISMA_KELLY_ENABLED', False) and p.get('meta'):
-            from ..prisma import kelly
-            bankroll = get_prisma_bankroll()
-            # On privilégie la probabilité calibrée du modèle ML si présente
-            # Sinon on peut tenter une conversion du score PRISMA en proba (moins précis)
-            prob_ml = p['meta'].get('confidence')
-            
-            if prob_ml:
-                cote_val = p.get(f'cote_{p["prediction"].lower()}')
-                mise_ar = kelly.calculate_kelly_stake(
-                    probability=prob_ml,
-                    odds=float(cote_val) if cote_val else 0,
-                    bankroll=bankroll,
-                    fraction=getattr(config, 'PRISMA_KELLY_FRACTION', 0.2),
-                    max_stake=getattr(config, 'PRISMA_MAX_STAKE', 2000),
-                    min_stake=getattr(config, 'PRISMA_MIN_STAKE', 1000)
-                )
-            else:
-                 # Fallback mise fixe si pas de probas
-                 mise_ar = config.MONTANT_FIXE_MULTIPLE if config.USE_MONTANT_FIXE else int(bankroll * 0.05)
-        else:
-            # Fallback historique
-            mise_ar = config.MONTANT_FIXE_MULTIPLE if config.USE_MONTANT_FIXE else int(get_prisma_bankroll() * 0.05)
-        
-        # Sécurité minimale
-        if mise_ar <= 0:
-            logger.info(f"[PRISMA] Saut du pari pour {p['equipe_dom']} (Mise Kelly null ou espérance négative)")
-            continue
+    # Phase 3 : Pari Multiple (Combiné) prioritaire — nécessite min 2 matchs validés
+    multiple_result = None
+    selections_combinable = []
+    for p in final_selection:
+        cote_key = "cote_x" if p["prediction"].upper() in ["N", "X"] else f"cote_{p['prediction'].lower()}"
+        cote_val = p.get(cote_key)
+        if cote_val and float(cote_val) <= getattr(config, 'MAX_COMBINED_ODDS', 5.0):
+            selections_combinable.append(p)
+    if len(selections_combinable) >= 2:
+        multiple_result = multiple_bets.generer_pari_multiple(journee, selections_combinable, conn=conn)
 
-        fonds_suffisants, current_bankroll = deduct_prisma_funds(mise_ar)
-        if fonds_suffisants:
-            cote_val = p.get('cote_1') if p['prediction'] == '1' else (p.get('cote_x') if p['prediction'] in ['X', 'N'] else p.get('cote_2'))
-            enregistrer_pari(
-                PariRecord(
-                    session_id=session_id,
-                    prediction_id=pred_id,
-                    journee=journee,
-                    type_pari=p['prediction'],
-                    mise_ar=mise_ar,
-                    pourcentage_bankroll=0.05,
-                    cote_jouee=float(cote_val) if cote_val else 0,
-                    resultat=None,
-                    profit_net=None,
-                    bankroll_apres=current_bankroll,
-                    probabilite_implicite=1.0 / float(cote_val) if cote_val else None,
-                    action_id=0,
-                    strategie='PRISMA'
-                ),
-                conn=conn
-            )
-    
-    multiple_bets.generer_pari_multiple(journee, final_selection, conn=conn)
+    # Phase 4 : Paris Simples (SEULEMENT si le pari multiple n'a pas été placé)
+    if not multiple_result:
+        for p in final_selection:
+            # Filtrer les cotes trop élevées pour les paris simples aussi
+            cote_key_p = "cote_x" if p["prediction"].upper() in ["N", "X"] else f"cote_{p['prediction'].lower()}"
+            cote_val_p = p.get(cote_key_p)
+            if cote_val_p and float(cote_val_p) > getattr(config, 'MAX_COMBINED_ODDS', 5.0):
+                logger.info(f"[PRISMA] Pari simple rejeté pour {p.get('equipe_dom')} vs {p.get('equipe_ext')} : cote {float(cote_val_p):.2f} > plafond {config.MAX_COMBINED_ODDS}")
+                continue
+
+            # Place Simple Bet for PRISMA
+            # On utilise Kelly si activé et qu'on a des probabilités ML dispo
+            if getattr(config, 'PRISMA_KELLY_ENABLED', False) and p.get('meta'):
+                from ..prisma import kelly
+                bankroll = get_prisma_bankroll()
+                # On privilégie la probabilité calibrée du modèle ML si présente
+                prob_ml = p['meta'].get('confidence')
+                
+                if prob_ml:
+                    cote_key = "cote_x" if p["prediction"].upper() in ["N", "X"] else f"cote_{p['prediction'].lower()}"
+                    cote_val = p.get(cote_key)
+                    mise_ar = kelly.calculate_kelly_stake(
+                        probability=prob_ml,
+                        odds=float(cote_val) if cote_val else 0,
+                        bankroll=bankroll,
+                        fraction=getattr(config, 'PRISMA_KELLY_FRACTION', 0.2),
+                        max_stake=getattr(config, 'PRISMA_MAX_STAKE', 2000),
+                        min_stake=getattr(config, 'PRISMA_MIN_STAKE', 1000)
+                    )
+                else:
+                     # Fallback mise fixe si pas de probas
+                     mise_ar = config.MONTANT_FIXE_MULTIPLE if config.USE_MONTANT_FIXE else int(bankroll * 0.05)
+            else:
+                # Fallback historique
+                mise_ar = config.MONTANT_FIXE_MULTIPLE if config.USE_MONTANT_FIXE else int(get_prisma_bankroll() * 0.05)
+            
+            # Sécurité minimale
+            if mise_ar <= 0:
+                logger.info(f"[PRISMA] Saut du pari pour {p['equipe_dom']} (Mise Kelly null ou espérance négative)")
+                continue
+
+            fonds_suffisants, current_bankroll = deduct_prisma_funds(mise_ar)
+            if fonds_suffisants:
+                cote_val = p.get('cote_1') if p['prediction'] == '1' else (p.get('cote_x') if p['prediction'] in ['X', 'N'] else p.get('cote_2'))
+                enregistrer_pari(
+                    PariRecord(
+                        session_id=session_id,
+                        prediction_id=p['id'],
+                        journee=journee,
+                        type_pari=p['prediction'],
+                        mise_ar=mise_ar,
+                        pourcentage_bankroll=0.05,
+                        cote_jouee=float(cote_val) if cote_val else 0,
+                        resultat=None,
+                        profit_net=None,
+                        bankroll_apres=current_bankroll,
+                        probabilite_implicite=1.0 / float(cote_val) if cote_val else None,
+                        action_id=0,
+                        strategie='PRISMA'
+                    ),
+                    conn=conn
+                )
     return final_selection
 
 def analyser_buts_recents_internal(cursor, session_id, equipe_id):
@@ -379,167 +413,228 @@ def obtenir_predictions_zeus_journee(journee: int) -> List[Dict]:
         return []
     active_session = get_active_session()
     session_id = active_session['id']
-    predictions = []
+    all_predictions = []
     try:
-        with get_db_connection() as conn:
+        with get_db_connection(write=True) as conn:
             matches = get_matches_for_journee(journee, conn)
             cursor = conn.cursor()
-            # Récupérer capital actuel et dette
-            cursor.execute("SELECT bankroll_apres FROM historique_paris WHERE session_id = %s AND strategie = 'ZEUS' ORDER BY id_pari DESC LIMIT 1", (session_id,))
-            row = cursor.fetchone()
-            capital_actuel = row['bankroll_apres'] if row else active_session['capital_initial']
+            # 1. Collecter TOUTES les opportunités ZEUS d'abord
+            candidates = []
+            for m in matches:
+                if not m['cote_1'] or not m['cote_x'] or not m['cote_2']:
+                    continue
+                
+                action_id, details = predire_pari_zeus(model, m, conn)
+                if details.get('montant_ar', 0) > 0 and details['type'] != 'Aucun':
+                    candidates.append({
+                        'match': m,
+                        'match_id': m['id'],
+                        'equipe_dom': m['equipe_dom_nom'],
+                        'equipe_ext': m['equipe_ext_nom'],
+                        'action_id': action_id,
+                        'prediction': details['type'],
+                        'pari_type': details['type'],
+                        'details': details,
+                        'mise_ar': details.get('montant_ar', 0),
+                        'decision_formatee': formater_decision_zeus(details)
+                    })
+
+            if not candidates:
+                return []
+
+            # 2. Phase Prioritaire : Pari Combiné (Multiple) si au moins 2 opportunités
+            multiple_result = None
+            ids_in_multiple = set()
             
+            if len(candidates) >= 2:
+                # ZEUS prend exactement les 2 premiers matchs pour son combiné
+                print_verbose(f"   🎯 [ZEUS] Tentative de pari combiné avec {len(candidates)} opportunités...")
+                multiple_result = multiple_bets.generer_pari_multiple(journee, candidates[:2], strategie='ZEUS', conn=conn)
+                
+                if multiple_result:
+                    # Marquer les matchs comme étant dans le combiné
+                    ids_in_multiple = {c['match_id'] for c in candidates[:2]}
+                    # Ajouter à la liste de retour pour visibilité
+                    for c in candidates[:2]:
+                        c['in_multiple'] = True
+                        all_predictions.append(c)
+                    logger.info(f"[ZEUS] ✅ Pari combiné placé. Paris simples supprimés pour ces matchs.")
+                else:
+                    # Le combiné a échoué (stop-loss, fonds insuffisants, etc.) :
+                    # On ne place PAS de paris simples sur ces matchs pour éviter le double-pari
+                    ids_in_multiple = {c['match_id'] for c in candidates[:2]}
+                    logger.warning(f"[ZEUS] ⚠️ Pari combiné échoué. Les {len(ids_in_multiple)} matchs concernés sont exclus des paris simples.")
+            
+            # 3. Phase Secondaire : Paris Simples pour les matchs restants
+            capital_actuel = get_zeus_bankroll(conn=conn)
             cursor.execute("SELECT dette_zeus, stop_loss_override FROM sessions WHERE id = %s", (session_id,))
             sess_row = cursor.fetchone()
             dette_actuelle = sess_row['dette_zeus'] if sess_row else 0
             override_stop_loss = sess_row['stop_loss_override'] if sess_row else False
             
-            # Limite de paris par jour pour éviter la sur-exposition
+            # Limite de paris par jour (compte le combiné s'il existe)
             limite_journaliere = 1 if dette_actuelle > 0 else 3
-            paris_engages = 0
-
-            model = get_zeus_model()
-            if model:
-                for m in matches:
-                    if paris_engages >= limite_journaliere:
-                        print_verbose(f"   🛑 [LIMITE ZEUS] Limite de {limite_journaliere} paris atteinte pour cette journée.")
-                        break
-
-                    if not m['cote_1'] or not m['cote_x'] or not m['cote_2']:
-                        continue
-                    prediction_id = None
-                    action_id, details = predire_pari_zeus(model, m, conn)
-                    mise_ar = details.get('montant_ar', 0)
-                    
-                    if mise_ar > 0 and details['type'] != 'Aucun':
-                        # Mode Prudence : Si ZEUS a une dette, on réduit la mise de 50%
-                        if dette_actuelle > 0:
-                            mise_ar = int(mise_ar * 0.5)
-                            print_verbose(f"   🛡️ [PRUDENCE ZEUS] Dette active ({dette_actuelle} Ar). Mise réduite à {mise_ar} Ar.")
-
-                        # Protection contre les anomalies de solde négatif
-                        if capital_actuel < 0:
-                            logger.error(f"[ANOMALIE] Bankroll ZEUS négatif ({capital_actuel} Ar). Paris suspendus jusqu'à régularisation.")
-                            print_verbose(f"   ⚠️ [ANOMALIE] Bankroll ZEUS négatif ({capital_actuel} Ar). Emprunt ou régularisation requis.")
-                            break
-
-                        # Stop-Loss (désactivable via override)
-                        if capital_actuel < config.BANKROLL_STOP_LOSS and not override_stop_loss:
-                            logger.warning(f"[STOP-LOSS] Bankroll ZEUS ({capital_actuel} Ar) sous le seuil ({config.BANKROLL_STOP_LOSS} Ar). Arrêt des paris ZEUS.")
-                            print_verbose(f"   ⛔ [STOP-LOSS] Bankroll ZEUS ({capital_actuel} Ar) < {config.BANKROLL_STOP_LOSS} Ar. Paris suspendus (Override: Non).")
-                            break
-                        elif capital_actuel < config.BANKROLL_STOP_LOSS and override_stop_loss:
-                            print_verbose(f"   🔓 [OVERRIDE] Bankroll ({capital_actuel} Ar) sous le seuil, mais passage autorisé par l'utilisateur.")
-                        # Check if match is already in a combo
-                        cursor.execute("""
-                            SELECT COUNT(*) as count
-                            FROM pari_multiple_items pmi
-                            JOIN predictions p ON pmi.prediction_id = p.id
-                            JOIN pari_multiple pm ON pmi.pari_multiple_id = pm.id
-                            WHERE p.match_id = %s AND pm.session_id = %s AND pm.resultat IS NULL
-                        """, (m['id'], session_id))
-                        result = cursor.fetchone()
-                        if result and result['count'] > 0:
-                            logger.info(f"Match {m['equipe_dom_nom']} vs {m['equipe_ext_nom']} déjà présent dans le combiné du jour. Saut du pari simple ZEUS.")
-                            continue
-
-                        cursor.execute("""
-                            INSERT INTO predictions (session_id, match_id, prediction, fiabilite, source)
-                            VALUES (%s, %s, %s, %s, %s)
-                            RETURNING id
-                        """, (session_id, m['id'], details['type'], float(0.8), 'ZEUS'))
-                        prediction_id = cursor.fetchone()['id']
-                        bankroll_apres = capital_actuel - mise_ar
-                        cote_key = 'cote_x' if details["type"] == 'N' else f'cote_{details["type"].lower()}'
-                        cote_value = m.get(cote_key)
-                        enregistrer_pari(
-                            PariRecord(
-                                session_id=session_id,
-                                prediction_id=prediction_id,
-                                journee=journee,
-                                type_pari=details['type'],
-                                mise_ar=mise_ar,
-                                pourcentage_bankroll=mise_ar / capital_actuel if capital_actuel > 0 else 0,
-                                cote_jouee=float(cote_value) if cote_value else 0,
-                                resultat=None,
-                                profit_net=None,
-                                bankroll_apres=bankroll_apres,
-                                probabilite_implicite=1.0 / float(cote_value) if cote_value else None,
-                                action_id=action_id,
-                            ),
-                            conn=conn
-                        )
-                        capital_actuel = bankroll_apres
-                        paris_engages += 1
-                    predictions.append({
-                        'id': prediction_id, # Ajout de l'id pour le combiné
-                        'match_id': m['id'],
-                        'equipe_dom': m['equipe_dom_nom'],
-                        'equipe_ext': m['equipe_ext_nom'],
-                        'action_id': action_id,
-                        'pari_type': details['type'],
-                        'prediction': details['type'], # Alias pour multiple_bets
-                        'mise_ar': mise_ar,
-                        'decision_formatee': formater_decision_zeus(details)
-                    })
+            paris_engages = 1 if multiple_result else 0
             
-            # --- Génération du pari combiné ZEUS (Exactement 2 matchs) ---
-            placed_predictions = [p for p in predictions if p.get('mise_ar', 0) > 0]
-            if len(placed_predictions) >= 2:
-                # On prend les 2 meilleures/premières prédictions
-                multiple_bets.generer_pari_multiple(journee, placed_predictions[:2], strategie='ZEUS', conn=conn)
+            risk_engine = get_risk_engine()
+
+            for c in candidates:
+                # Sauter si déjà dans le combiné
+                if c['match_id'] in ids_in_multiple:
+                    continue
+                
+                # Vérifier limite
+                if paris_engages >= limite_journaliere:
+                    print_verbose(f"   🛑 [LIMITE ZEUS] Limite de {limite_journaliere} paris atteinte.")
+                    break
+
+                m = c['match']
+                details = c['details']
+                mise_ar = c['mise_ar']
+
+                # Mode Prudence : Si ZEUS a une dette, on réduit la mise de 50%
+                if dette_actuelle > 0:
+                    mise_ar = int(mise_ar * 0.5)
+
+                # Protection bankroll & stop-loss
+                if capital_actuel < 0:
+                    logger.error(f"[ANOMALIE] Bankroll ZEUS négatif. Paris stoppés.")
+                    break
+
+                if capital_actuel < config.BANKROLL_STOP_LOSS and not override_stop_loss:
+                    print_verbose(f"   ⛔ [STOP-LOSS] Bankroll ZEUS sous le seuil.")
+                    break
+
+                # === VALIDATION RISK ENGINE ===
+                cote_key = 'cote_x' if details["type"] == 'N' else f'cote_{details["type"].lower()}'
+                cote_value = m.get(cote_key, 0)
+                
+                bet_request = BetRequest(
+                    agent='ZEUS',
+                    session_id=session_id,
+                    journee=journee,
+                    match_id=m['id'],
+                    bet_type=details['type'],
+                    amount=mise_ar,
+                    odds=float(cote_value) if cote_value else 0.0,
+                    confidence=0.8,
+                    zeus_score=details.get('score', 0.6)
+                )
+                
+                validation_result = risk_engine.validate_bet(bet_request)
+                
+                if validation_result.status != ValidationStatus.ACCEPTED:
+                    logger.warning(f"[RISK-ENGINE] Pari ZEUS refusé: {validation_result.message}")
+                    continue
+                
+                # Exécution du pari simple
+                if validation_result.adjusted_amount:
+                    mise_ar = validation_result.adjusted_amount
+
+                cursor.execute("""
+                    INSERT INTO predictions (session_id, match_id, prediction, fiabilite, source)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (session_id, match_id, source) DO UPDATE SET
+                        prediction = EXCLUDED.prediction,
+                        fiabilite = EXCLUDED.fiabilite
+                    RETURNING id
+                """, (session_id, m['id'], details['type'], float(0.8), 'ZEUS'))
+                prediction_id = cursor.fetchone()['id']
+                
+                bankroll_apres = capital_actuel - mise_ar
+                enregistrer_pari(
+                    PariRecord(
+                        session_id=session_id,
+                        prediction_id=prediction_id,
+                        journee=journee,
+                        type_pari=details['type'],
+                        mise_ar=mise_ar,
+                        pourcentage_bankroll=mise_ar / capital_actuel if capital_actuel > 0 else 0,
+                        cote_jouee=float(cote_value) if cote_value else 0,
+                        resultat=None,
+                        profit_net=None,
+                        bankroll_apres=bankroll_apres,
+                        probabilite_implicite=1.0 / float(cote_value) if cote_value else None,
+                        action_id=c['action_id'],
+                        strategie='ZEUS'
+                    ),
+                    conn=conn
+                )
+                update_zeus_bankroll(bankroll_apres, conn=conn)
+                capital_actuel = bankroll_apres
+                paris_engages += 1
+                
+                c['id'] = prediction_id
+                c['mise_ar'] = mise_ar
+                all_predictions.append(c)
+                logger.info(f"[ZEUS] ✓ Pari simple validé: {m['equipe_dom_nom']} vs {m['equipe_ext_nom']}")
 
     except Exception as e:
         logger.error(f"Erreur prédictions ZEUS J{journee} : {e}", exc_info=True)
-    return predictions
+    
+    return all_predictions
 
 def check_training_needs():
-    """Vérification rapide non-bloquante des besoins d'entraînement."""
+    """Vérification robuste des besoins d'entraînement (Session + Volume)."""
     try:
+        from prisma import xgboost_model
         with get_db_connection() as conn:
             active_session = get_active_session(conn=conn)
             if not active_session:
                 return False
             
-            session_id = active_session['id']
+            current_session_id = active_session['id']
+            current_day = active_session.get('current_day', 1)
             
-            # Vérification rapide : seulement si on a des matchs terminés
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(id) AS cnt FROM matches WHERE session_id = %s AND score_dom IS NOT NULL", (session_id,))
-            matchs_termines = cursor.fetchone()['cnt']
-            
-            # Vérifier si un entraînement est déjà en cours
+            # 1. Vérifier si un entraînement est déjà en cours
             with _training_lock:
                 if _training_in_progress:
                     return False
             
+            # 2. Vérifier les métadonnées pour changement de session
+            meta = xgboost_model.get_model_metadata()
+            last_session = meta.get('last_training_session', 0) if meta else 0
+            
+            if current_session_id > last_session:
+                logger.info(f"[IA-BOOSTER] Transition de session détectée ({last_session} -> {current_session_id})")
+                return True
+
+            # 3. Vérification par volume (toutes les 10 journées)
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(id) AS cnt FROM matches WHERE session_id = %s AND score_dom IS NOT NULL", (current_session_id,))
+            matchs_termines = cursor.fetchone()['cnt']
+            
             return matchs_termines > 0 and matchs_termines % 10 == 0
             
     except Exception as e:
-        logger.warning(f"[ENSEMBLE] Erreur vérification rapide: {e}")
+        logger.warning(f"[IA-BOOSTER] Erreur vérification training: {e}")
         return False
 
 
 def _train_ensemble_async():
-    """Fonction wrapper pour exécuter l'entraînement PRISMA de manière asynchrone."""
+    """Exécute le pipeline complet PRISMA Intelligence++ de manière asynchrone."""
     global _training_in_progress
     
     try:
-        logger.info("[ENSEMBLE] Démarrage entraînement asynchrone en arrière-plan...")
-        # Créer une nouvelle connexion dans le thread
+        logger.info("[IA-BOOSTER] 🚀 DÉMARRAGE PIPELINE PRISMA INTELLIGENCE++ (Background)")
         with get_db_connection(write=True) as conn:
-            from ..prisma.ensemble import train_ensemble
-            success = train_ensemble(conn)
-            if success:
-                logger.info("[ENSEMBLE] Entraînement asynchrone terminé avec succès")
+            from prisma.orchestrator import PrismaIntelligenceOrchestrator
+            
+            orchestrator = PrismaIntelligenceOrchestrator(conn)
+            # On exécute Audit -> Train -> Validate -> Feedback -> Monitor
+            results = orchestrator.run_full_pipeline()
+            
+            if results and 'training' in results and results['training']['status'] == 'success':
+                logger.info("[IA-BOOSTER] ✅ Pipeline PRISMA terminé avec succès")
             else:
-                logger.warning("[ENSEMBLE] Entraînement asynchrone échoué")
+                 logger.warning("[IA-BOOSTER] ⚠️ Pipeline terminé avec des erreurs partielles")
+                 
     except Exception as e:
-        logger.error(f"[ENSEMBLE] Erreur dans l'entraînement asynchrone: {e}")
+        logger.error(f"[IA-BOOSTER] ❌ Erreur critique dans le pipeline asynchrone: {e}")
     finally:
         with _training_lock:
             _training_in_progress = False
-        logger.info("[ENSEMBLE] Verrou d'entraînement libéré")
+        logger.info("[IA-BOOSTER] Verrou de pipeline libéré")
 
 
 def mettre_a_jour_scoring():

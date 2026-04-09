@@ -3,6 +3,8 @@ PRISMA Kelly Criterion Module
 Gestion optimisée des mises pour maximiser la croissance du capital tout en limitant le risque.
 """
 import logging
+import sys
+import os
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -69,16 +71,24 @@ def get_recommended_stake(data: dict, bankroll: int) -> int:
     """
     Helper pour extraire les paramètres d'un objet résultat PRISMA et calculer la mise.
     """
-    from src.core import config
+    try:
+        from core import config
+    except ImportError:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+        from core import config
     
     prob = data.get('confidence', 0.0)
-    prediction = data.get('prediction')
+    prediction = data.get('prediction', '')
     
     if not prediction:
         return 0
         
-    # On récupère la cote correspondante
-    cote_key = f"cote_{prediction.lower()}"
+    # On récupère la cote correspondante ('N' ou 'X' -> 'cote_x', '1' -> 'cote_1', '2' -> 'cote_x')
+    if prediction.upper() in ['N', 'X']:
+        cote_key = "cote_x"
+    else:
+        cote_key = f"cote_{prediction.lower()}"
+    
     odds = data.get(cote_key, 0.0)
     
     if odds <= 0:

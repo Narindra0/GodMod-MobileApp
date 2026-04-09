@@ -4,12 +4,13 @@ Entraînement, chargement, prédiction du modèle CatBoost.
 CatBoost excelle sur les features catégorielles (forme, instabilité).
 """
 import os
+import sys
 import json
 import logging
 import numpy as np
 from datetime import datetime
 
-from . import xgboost_features
+from prisma import xgboost_features
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +19,27 @@ _model_metadata = None
 
 
 def _get_model_dir():
-    from ..core import config
-    return os.path.join(config.BASE_DIR, 'models', 'prisma')
+    """Retourne le répertoire de stockage du modèle avec détection robuste."""
+    # 1. Tenter via core.config pour la cohérence globale
+    try:
+        try:
+            from core import config
+        except ImportError:
+            # Tenter avec un path local si on est dans un sous-répertoire
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+            from core import config
+        
+        if hasattr(config, 'BASE_DIR'):
+            path = os.path.join(config.BASE_DIR, 'models', 'prisma')
+            if os.path.exists(path):
+                return path
+    except Exception:
+        pass
+    
+    # 2. Fallback robuste : basé sur la position physique de ce fichier
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    fallback_path = os.path.abspath(os.path.join(this_dir, '..', '..', 'models', 'prisma'))
+    return fallback_path
 
 
 def _get_model_path():
@@ -39,9 +59,10 @@ def load_model():
 
     if _model is not None:
         return _model
-
-    if not os.path.exists(_get_model_path()):
-        logger.info("[CATBOOST] Aucun modèle trouvé sur le disque.")
+    
+    model_path = _get_model_path()
+    if not os.path.exists(model_path):
+        logger.info(f"[CATBOOST] Aucun modèle trouvé à: {model_path}")
         return None
 
     try:
@@ -67,7 +88,7 @@ def load_model():
 def train_model(conn, force=False, decision=None):
     """Entraîne le modèle CatBoost avec complexité adaptative et triggers avancés."""
     global _model, _model_metadata
-    from ..core import config
+    from core import config
 
     try:
         from catboost import CatBoostClassifier, Pool
@@ -76,11 +97,11 @@ def train_model(conn, force=False, decision=None):
         return False
 
     # Importer les modules avancés
-    from .session_weighted_training import extract_weighted_training_data, get_training_summary
-    from .adaptive_complexity import get_training_context, log_complexity_summary
+    from prisma.session_weighted_training import extract_weighted_training_data, get_training_summary
+    from prisma.adaptive_complexity import get_training_context, log_complexity_summary
     
     # Récupérer le contexte d'entraînement
-    from src.core.session_manager import get_active_session
+    from core.session_manager import get_active_session
     current_session = get_active_session(conn)
     if not current_session:
         logger.warning("[CATBOOST] Impossible de déterminer la session actuelle")
@@ -91,7 +112,7 @@ def train_model(conn, force=False, decision=None):
     
     # Utiliser la décision fournie ou évaluer les triggers si nécessaire
     if decision is None:
-        from .training_triggers import should_retrain_models
+        from prisma.training_triggers import should_retrain_models
         decisions = should_retrain_models(conn, current_session_id, current_day)
         cat_decision = decisions['catboost']
     else:
@@ -102,7 +123,7 @@ def train_model(conn, force=False, decision=None):
         return False
     
     # Logger la décision
-    from .training_triggers import TrainingTrigger
+    from prisma.training_triggers import TrainingTrigger
     trigger_manager = TrainingTrigger(conn)
     trigger_manager.log_training_decision(cat_decision)
     
@@ -117,6 +138,15 @@ def train_model(conn, force=False, decision=None):
         logger.info(f"[CATBOOST] Pas assez de données pondérées ({actual}/150).")
         return False
 
+    # FORÇAGE TEMPORAIRE: Si le modèle existant a 31 features, on doit ré-entraîner pour passer à 59
+    if not force:
+        model_meta = get_model_info()
+        if model_meta and model_meta.get('features_count', 0) == 31:
+            logger.info("[CATBOOST] 🔄 Détection d'un ancien modèle (31 features). Forçage du ré-entraînement vers 59 features...")
+            force = True
+
+    from prisma.training_status import status_manager
+    status_manager.update_model("catboost", status="training", progress=10)
     logger.info(f"[CATBOOST] Entraînement adaptatif sur {len(y)} échantillons...")
 
     # Configuration CatBoost adaptative
@@ -140,11 +170,14 @@ def train_model(conn, force=False, decision=None):
         auto_class_weights='Balanced',
     )
 
+    status_manager.update_model("catboost", status="training", progress=30)
     model.fit(X, y, cat_features=cat_features)
+    status_manager.update_model("catboost", status="completed", progress=100)
 
-    # Métadonnées enrichies
-    metadata = {
+    # Métadonnées
+    _model_metadata = {
         'trained_at': datetime.now().isoformat(),
+        'features_count': X.shape[1],
         'training_samples': len(y),
         'feature_names': xgboost_features.FEATURE_NAMES,
         'label_distribution': {
@@ -171,10 +204,9 @@ def train_model(conn, force=False, decision=None):
     model.save_model(_get_model_path())
 
     with open(_get_metadata_path(), 'w') as f:
-        json.dump(metadata, f, indent=2)
+        json.dump(_model_metadata, f, indent=2)
 
     _model = model
-    _model_metadata = metadata
 
     logger.info(
         f"[CATBOOST] ✅ Modèle adaptatif sauvegardé. "
@@ -188,7 +220,7 @@ def train_model(conn, force=False, decision=None):
 
 
 def predict_match(features) -> dict:
-    from . import xgboost_features
+    from prisma import xgboost_features
     import pandas as pd
 
     model = load_model()
@@ -198,10 +230,11 @@ def predict_match(features) -> dict:
     try:
         # Si c'est un DataFrame (1 ligne), on l'utilise direct
         # Sinon on reshape (numpy)
+        # CatBoost préfère les DataFrame avec noms de colonnes pour la cohérence
         if isinstance(features, pd.DataFrame):
             X = features
         else:
-            X = features.reshape(1, -1)
+            X = pd.DataFrame(features.reshape(1, -1), columns=xgboost_features.FEATURE_NAMES)
 
         probas = model.predict_proba(X)[0]
         predicted_class = int(probas.argmax())
@@ -242,7 +275,14 @@ def get_model_info() -> dict:
 
 
 def invalidate_model():
+    """Force le rechargement du modèle au prochain appel en le supprimant du disque."""
     global _model, _model_metadata
     _model = None
     _model_metadata = None
-    logger.info("[CATBOOST] Cache modèle invalidé.")
+    try:
+        model_p = _get_model_path()
+        if os.path.exists(model_p):
+            os.remove(model_p)
+    except Exception as e:
+        logger.error(f"[CATBOOST] Erreur suppression disque: {e}")
+    logger.info("[CATBOOST] Cache modèle invalidé et supprimé du disque.")

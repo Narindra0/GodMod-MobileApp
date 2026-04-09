@@ -1,5 +1,8 @@
 import json
 import logging
+import os
+import re
+import requests
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List
@@ -22,8 +25,8 @@ Contexte :
 - Un taux < 50% pour PRISMA sur 10J indique une faille. Pour ZEUS, un taux plus bas peut être rentable selon son money management systématique.
 
 Ta mission :
-Analyse les paris fournis et sépare strictement tes conclusions entre PRISMA et ZEUS.
-Retourne UNIQUEMENT ce JSON valide, respectant scrupuleusement la structure ci-dessous, sans texte avant ni après :
+Utilise ton raisonnement profond pour analyser les paris fournis et sépare strictement tes conclusions entre PRISMA et ZEUS. IDENTIFIE les forces et faiblesses réelles.
+A la fin de ton analyse, retourne UNIQUEMENT ce JSON valide, respectant scrupuleusement la structure ci-dessous :
 {
   "prisma_audit": {
     "summary": "<Résumé spécifique à PRISMA: X/10 gagnés, ROI, tendance>",
@@ -44,30 +47,35 @@ Retourne UNIQUEMENT ce JSON valide, respectant scrupuleusement la structure ci-d
 }
 """
 
-def perform_cycle_audit_async(journee: int, session_id: int):
-    """Lance l'audit rétrospectif du cycle en arrière-plan."""
+def perform_cycle_audit_async(journee: int, session_id: int, start_j: int = None, end_j: int = None):
+    """Lance l'audit rétrospectif d'une période en arrière-plan."""
     import threading
     from ..core.database import get_db_connection
     
     def _run_audit():
         try:
             with get_db_connection(write=True) as conn:
-                perform_cycle_audit(journee, session_id, conn)
+                perform_cycle_audit(journee, session_id, conn, start_j, end_j)
         except Exception as e:
             logger.error(f"[AI-AUDIT] Erreur audit asynchrone J{journee}: {e}")
     
     thread = threading.Thread(target=_run_audit, daemon=True)
     thread.start()
-    logger.info(f"[AI-AUDIT] Audit du cycle J{journee} lancé en arrière-plan")
+    if start_j and end_j:
+        logger.info(f"[AI-AUDIT] Audit ciblé J{start_j}-J{end_j} lancé en arrière-plan")
+    else:
+        logger.info(f"[AI-AUDIT] Audit du cycle J{journee} lancé en arrière-plan")
 
 
-def perform_cycle_audit(current_journee: int, session_id: int, conn) -> bool:
+def perform_cycle_audit(current_journee: int, session_id: int, conn, start_j: int = None, end_j: int = None) -> bool:
     """
-    Réalise un audit rétrospectif des DERNIÈRES journées de paris (cycle de 10).
+    Réalise un audit rétrospectif des journées de paris (cycle par défaut de 10 ou plage définie).
     Sépare clairement les actions PRISMA et ZEUS dans le prompt IA.
     """
-    start_j = max(1, current_journee - 9)
-    end_j = current_journee
+    if start_j is None:
+        start_j = max(1, current_journee - 9)
+    if end_j is None:
+        end_j = current_journee
     
     logger.info(f"[AI-AUDIT] Début audit rétrospectif : J{start_j} à J{end_j}")
     
@@ -147,43 +155,170 @@ def perform_cycle_audit(current_journee: int, session_id: int, conn) -> bool:
         logger.error(f"[AI-AUDIT] Erreur lors de l'audit : {e}", exc_info=True)
         return False
 
-def _get_ai_audit_report(data_text: str) -> dict:
-    """Interroge l'IA pour générer le rapport d'audit."""
-    api_key = getattr(config, "GEMINI_API_KEY", None)
-    if not api_key:
-        return None
-        
+def _extract_json(text: str) -> dict:
+    """Extrait et parse le premier bloc JSON trouvé dans un texte."""
     try:
-        from google import genai
-        client = genai.Client(api_key=api_key)
-        model = getattr(config, "GEMINI_MODEL", "gemini-1.5-flash")
-        
-        response = client.models.generate_content(
-            model=model,
-            contents=f"{_SYSTEM_PROMPT_AUDIT}\n\nDonnées du cycle :\n{data_text}",
-            config={"response_mime_type": "application/json", "temperature": 0.3},
-        )
-        return json.loads(response.text)
+        # Recherche d'un bloc {...} (greedy pour prendre tout le JSON)
+        match = re.search(r'(\{.*\})', text, re.DOTALL)
+        if match:
+            json_text = match.group(1)
+            # Nettoyage basique (parfois l'IA met des ```json ... ```)
+            json_text = json_text.strip()
+            return json.loads(json_text)
+        return json.loads(text) # Fallback si pas de match, on tente le texte entier
     except Exception as e:
-        logger.warning(f"[AI-AUDIT] Échec Gemini, tentative Groq... ({e})")
+        logger.error(f"[AI-AUDIT] Échec extraction JSON : {e}")
+        return None
+
+def _get_ai_audit_report(data_text: str) -> dict:
+    """Interroge l'IA pour générer le rapport d'audit.
+    Priorité : Ollama (Local/VPS) -> OpenRouter -> Gemini -> Groq.
+    """
+    # 0. Tentative avec Ollama (Prioritaire si activé)
+    if getattr(config, "OLLAMA_ENABLED", False):
+        ollama_url = getattr(config, "OLLAMA_URL", "http://localhost:11434")
+        ollama_model = getattr(config, "OLLAMA_MODEL", "llama3")
+        ollama_key = getattr(config, "OLLAMA_API_KEY", "")
         
-        groq_key = getattr(config, "GROQ_API_KEY", None)
-        if groq_key:
+        # Headers pour l'authentification (Open WebUI utilise souvent des clés API)
+        headers = {"Content-Type": "application/json"}
+        if ollama_key:
+            headers["Authorization"] = f"Bearer {ollama_key}"
+        
+        # On tente l'endpoint standard Ollama et l'endpoint compatible OpenAI (Open WebUI)
+        endpoints = [
+            f"{ollama_url}/api/chat", # Standard Ollama
+            f"{ollama_url}/api/chat/completions", # Open WebUI / OpenAI compatible
+        ]
+        
+        for endpoint in endpoints:
             try:
-                from groq import Groq
-                g_client = Groq(api_key=groq_key)
-                g_model = getattr(config, "GROQ_MODEL", "llama-3.1-8b-instant")
+                logger.info(f"[AI-AUDIT] Appel de Ollama ({ollama_model}) sur {endpoint}...")
                 
-                completion = g_client.chat.completions.create(
-                    model=g_model,
-                    messages=[
+                # Format Payload (On tente un format compatible Chat)
+                payload = {
+                    "model": ollama_model,
+                    "messages": [
                         {"role": "system", "content": _SYSTEM_PROMPT_AUDIT},
                         {"role": "user", "content": data_text}
                     ],
-                    response_format={"type": "json_object"}
-                )
-                return json.loads(completion.choices[0].message.content)
-            except Exception as ge:
-                logger.error(f"[AI-AUDIT] Échec total Audit IA: {ge}")
+                    "stream": False,
+                    "temperature": 0.4
+                }
+                
+                # Timeout scindé : 10s pour la connexion, 80s pour la lecture
+                response = requests.post(endpoint, json=payload, headers=headers, timeout=(10, 80))
+                if response.status_code == 200:
+
+                    result = response.json()
+                    
+                    # Extraction selon l'API (Ollama vs OpenAI)
+                    if 'message' in result: # Format Ollama
+                        raw_content = result['message']['content']
+                    elif 'choices' in result: # Format OpenAI
+                        raw_content = result['choices'][0]['message']['content']
+                    else:
+                        continue
+                        
+                    logger.info(f"[AI-AUDIT] Rapport généré avec succès par Ollama ({endpoint}).")
+                    parsed = _extract_json(raw_content)
+                    if parsed: return parsed
+                else:
+                    logger.warning(f"[AI-AUDIT] Échec Ollama {endpoint} ({response.status_code})")
+            except requests.exceptions.ConnectTimeout:
+                logger.warning(f"[AI-AUDIT] Timeout connexion Ollama sur {endpoint} (10s)")
+            except requests.exceptions.ReadTimeout:
+                logger.warning(f"[AI-AUDIT] Timeout lecture Ollama sur {endpoint} (80s)")
+            except Exception as e:
+                logger.warning(f"[AI-AUDIT] Erreur connexion Ollama sur {endpoint}: {e}")
+
+    # 1. Tentative avec OpenRouter (Principal + Fallbacks internes)
+
+    openrouter_key = getattr(config, "OPENROUTER_API_KEY", None)
+    if openrouter_key:
+        openrouter_models = [
+            config.OPENROUTER_MODEL,
+            "google/gemini-2.0-flash-exp:free",
+            "mistralai/mistral-7b-instruct:free"
+        ]
+        
+        for model_name in openrouter_models:
+            try:
+                logger.info(f"[AI-AUDIT] Appel de OpenRouter ({model_name})...")
+                url = "https://openrouter.ai/api/v1/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {openrouter_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://godmod.app",
+                    "X-Title": "GodMod AI Booster"
+                }
+                payload = {
+                    "model": model_name,
+                    "messages": [
+                        {"role": "system", "content": _SYSTEM_PROMPT_AUDIT},
+                        {"role": "user", "content": data_text}
+                    ],
+                    "temperature": 0.4
+                }
+                
+                response = requests.post(url, json=payload, headers=headers, timeout=60)
+                if response.status_code == 200:
+                    result = response.json()
+                    raw_content = result['choices'][0]['message']['content']
+                    logger.info(f"[AI-AUDIT] Rapport généré avec succès par OpenRouter ({model_name}).")
+                    return _extract_json(raw_content)
+                else:
+                    logger.warning(f"[AI-AUDIT] Échec OpenRouter {model_name} ({response.status_code}): {response.text[:100]}...")
+            except Exception as e:
+                logger.warning(f"[AI-AUDIT] Erreur OpenRouter {model_name}: {e}...")
+        
+        logger.warning("[AI-AUDIT] Épuisement des modèles OpenRouter. Basculement vers Gemini...")
+    else:
+        logger.info("[AI-AUDIT] OPENROUTER_API_KEY non trouvée, passage au fallback (Gemini)")
+
+    # 2. Fallback Gemini
+    api_key = getattr(config, "GEMINI_API_KEY", None)
+    if api_key:
+        try:
+            logger.info(f"[AI-AUDIT] Appel de Gemini ({getattr(config, 'GEMINI_MODEL', 'gemini-1.5-flash')})...")
+            from google import genai
+            client = genai.Client(api_key=api_key)
+            model = getattr(config, "GEMINI_MODEL", "gemini-1.5-flash")
+            
+            response = client.models.generate_content(
+                model=model,
+                contents=f"{_SYSTEM_PROMPT_AUDIT}\n\nDonnées du cycle :\n{data_text}",
+                config={"response_mime_type": "application/json", "temperature": 0.3},
+            )
+            logger.info("[AI-AUDIT] Rapport généré avec succès par Gemini.")
+            return json.loads(response.text)
+        except Exception as e:
+            logger.warning(f"[AI-AUDIT] Échec Gemini ({e}) | Basculement vers le prochain fallback...")
+    else:
+        logger.info("[AI-AUDIT] GEMINI_API_KEY non trouvée, passage au fallback (Groq)")
+        
+    # 3. Fallback Groq
+    groq_key = getattr(config, "GROQ_API_KEY", None)
+    if groq_key:
+        try:
+            logger.info(f"[AI-AUDIT] Appel de Groq ({getattr(config, 'GROQ_MODEL', 'llama-3.1-8b-instant')})...")
+            from groq import Groq
+            g_client = Groq(api_key=groq_key)
+            g_model = getattr(config, "GROQ_MODEL", "llama-3.1-8b-instant")
+            
+            completion = g_client.chat.completions.create(
+                model=g_model,
+                messages=[
+                    {"role": "system", "content": _SYSTEM_PROMPT_AUDIT},
+                    {"role": "user", "content": data_text}
+                ],
+                response_format={"type": "json_object"}
+            )
+            logger.info("[AI-AUDIT] Rapport généré avec succès par Groq.")
+            return _extract_json(completion.choices[0].message.content)
+        except Exception as ge:
+            logger.error(f"[AI-AUDIT] Échec total de l'Audit IA (Dernier fallback: Groq): {ge}")
+    else:
+        logger.error("[AI-AUDIT] GROQ_API_KEY non trouvée, et aucun autre fallback disponible. Impossible de générer l'audit.")
                 
     return None

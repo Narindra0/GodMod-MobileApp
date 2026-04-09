@@ -5,9 +5,9 @@ from typing import Dict, List, Tuple
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-from src.core import config
-from src.core.database import get_db_connection
-from src.core.session_manager import get_active_session, update_session_day
+from core import config
+from core.database import get_db_connection
+from core.session_manager import get_active_session, update_session_day
 
 logger = logging.getLogger(__name__)
 
@@ -40,12 +40,20 @@ def insert_api_ranking(ranking_data: List[Dict], session_id: int = None) -> int:
         if journee > current_day + 1:
             logger.warning(f"Classement journee {journee} en avance (> +1). Ignoré pour éviter la désync.")
             return 0
-        if active_session["current_day"] != journee:
-            active_session = update_session_day(session_id, journee)
-            session_id = active_session["id"]
     # Pre-fetch team IDs to avoid queries in loop
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        # Fix #8 : Mise à jour du current_day DANS le même bloc de connexion
+        # pour éviter une race condition. Uniquement si session_id vient de l'interne
+        # (non passé explicitement par l'appelant, ex: collect_full_data)
+        current_session = get_active_session(conn=conn)
+        if current_session["id"] == session_id and current_session["current_day"] != journee:
+            cursor.execute(
+                "UPDATE sessions SET current_day = %s WHERE id = %s",
+                (journee, session_id)
+            )
+            logger.info(f"Session {session_id} mise à jour au jour {journee} (atomique avec classement)")
+
         cursor.execute("SELECT nom, id FROM equipes")
         equipes_map = {row["nom"]: row["id"] for row in cursor.fetchall()}
 
@@ -101,6 +109,7 @@ def insert_api_ranking(ranking_data: List[Dict], session_id: int = None) -> int:
             else:
                 logger.warning(f"Equipe '{team_name}' non trouvee dans la BDD")
 
+        count = 0
         if insert_data:
             cursor.executemany(
                 """

@@ -16,7 +16,7 @@ _last_update: Optional[str] = None
 
 def _get_matrix_path() -> str:
     """Retourne le chemin de sauvegarde de la matrice."""
-    from ..core import config
+    from core import config
     return os.path.join(config.MODELS_DIR, 'team_strength_matrix.json')
 
 def _initialize_matrix() -> None:

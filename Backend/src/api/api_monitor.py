@@ -13,7 +13,7 @@ from src.api.api_client import get_ranking, get_recent_results, get_upcoming_mat
 from src.api.db_integration import insert_api_matches, insert_api_ranking, insert_api_results
 from src.api.matches_filter import extract_matches_with_local_ids
 from src.api.results_filter import extract_results_minimal
-from src.core.console import (
+from core.console import (
     console,
     create_panel,
     create_table,
@@ -24,8 +24,8 @@ from src.core.console import (
     print_verbose,
     print_warning,
 )
-from src.core.database import get_db_connection
-from src.core.session_manager import get_active_session, update_session_day
+from core.database import get_db_connection
+from core.session_manager import get_active_session, update_session_day
 from src.zeus.training.self_improvement import trigger_zeus_improvement
 
 logger = logging.getLogger(__name__)
@@ -35,6 +35,30 @@ MONITOR_CONFIG = {
     "RETRY_DELAY": 10,
     "LOG_ACTIVITY": True,
 }
+
+def launch_background_transition_tasks(old_session_id: int):
+    """Lance l'Audit IA et l'entraînement PRISMA en asynchrone pour la transition de session."""
+    from src.analysis.ai_booster import perform_cycle_audit_async
+    
+    print_info("⏳ Lancement de l'Audit IA Booster de la session précédente...")
+    if old_session_id:
+        # Audit rétrospectif sur la fin de session (ex: J38)
+        perform_cycle_audit_async(38, old_session_id)
+        
+    def _train_prisma():
+        from core.database import get_db_connection
+        from src.prisma.ensemble import train_ensemble
+        
+        console.print("[yellow]🔄 PRISMA: Entraînement adaptatif en arrière-plan lancé...[/yellow]")
+        try:
+            with get_db_connection(write=True) as conn:
+                train_ensemble(conn, force=True)
+            console.print("[bold green]✅ PRISMA: Entraînement terminé avec succès ![/bold green]")
+        except Exception as e:
+            console.print(f"[bold red]❌ PRISMA: Échec de l'entraînement: {e}[/bold red]")
+            
+    threading.Thread(target=_train_prisma, daemon=True).start()
+    threading.Thread(target=trigger_zeus_improvement, daemon=True).start()
 
 
 def get_max_journee_in_db() -> int:
@@ -134,7 +158,7 @@ def collect_full_data(journee: int) -> bool:
         if new_state["id"] != session_id:
             console.rule("[bold magenta]TRANSITION DE SESSION EFFECTUEE (37 JOURS ATTEINTS)[/]")
             print_success(f"Nouvelle session active : {new_state['id']}")
-            threading.Thread(target=trigger_zeus_improvement, daemon=True).start()
+            launch_background_transition_tasks(session_id)
         # Vider le cache pour que le prochain cycle d'IA utilise les données fraîches
         vider_cache_intelligence()
     console.print()
@@ -181,7 +205,7 @@ def _start_new_cycle(last_journee_db: int, callback_on_new_journee) -> int:
     new_session = update_session_day(active_session["id"], 38 if last_journee_db >= 37 else 1)
     session_id = new_session["id"]
     print_info("Lancement du cycle d'amelioration ZEUS en arriere-plan...")
-    threading.Thread(target=trigger_zeus_improvement, args=(None,), daemon=True).start()
+    launch_background_transition_tasks(active_session["id"])
     print_step("Collecte des cotes pour J1")
     try:
         matches_raw = get_upcoming_matches()
@@ -251,7 +275,8 @@ def start_monitoring(callback_on_new_journee=None, verbose=True):
                 consecutive_errors = 0
 
                 # Détection d'un reset manuel ou d'une nouvelle saison (hors transition J38->J1 gérée plus bas)
-                if api_journee is not None and api_journee < last_journee_db and last_journee_db < 37:
+                # On ajoute une tolérance de 1 jour pour les lags passagers de l'API (J16 au lieu de J17)
+                if api_journee is not None and api_journee < (last_journee_db - 1) and last_journee_db < 37:
                     logger.warning(f"[MONITOR] Reset détecté : API J{api_journee} < BDD J{last_journee_db}")
                     console.print(create_panel(f"Alerte : Décalage détecté (Reset de date)\nBDD: J{last_journee_db} -> API: J{api_journee}", title="RESET DETECTE", style="yellow"))
                     # On force la collecte pour la nouvelle journée cible

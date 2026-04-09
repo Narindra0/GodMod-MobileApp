@@ -2,11 +2,20 @@ import logging
 import threading
 import time
 
-try:
-    import keyboard
-    KEYBOARD_AVAILABLE = True
-except (ImportError, Exception):
-    KEYBOARD_AVAILABLE = False
+import os
+import sys
+
+# Détection Headless (Hugging Face / Docker) pour désactiver keyboard qui plante sans clavier
+def _check_keyboard():
+    if os.environ.get("HEADLESS") == "true" or not sys.stdin.isatty():
+        return False
+    try:
+        import keyboard
+        return True
+    except (ImportError, Exception):
+        return False
+
+KEYBOARD_AVAILABLE = _check_keyboard()
 from dotenv import load_dotenv
 
 from src.analysis import ai_booster, intelligence
@@ -39,6 +48,11 @@ load_dotenv()
 def callback_predictions_ia(journee: int):
     console.print()
     console.print(create_panel(f"[bold]ANALYSE INTELLIGENTE - J{journee}[/]", style="magenta"))
+    
+    # Initialisation sécurisée pour éviter UnboundLocalError
+    br_zeus = 0
+    br_prisma = 0
+    
     try:
         print_step("Validation des predictions precedentes")
         intelligence.mettre_a_jour_scoring()
@@ -76,17 +90,20 @@ def callback_predictions_ia(journee: int):
             logger.warning(f"Erreur check AI toggle: {e}")
 
         if ai_enabled:
-            # Audit rétrospectif tous les 10 jours ou à la fin de la session
-            if journee % 10 == 0 or journee == config.SESSION_MAX_DAYS:
-                print_step(f"Initialisation de l'Audit IA (Cycle J{max(1, journee-9)}-J{journee})")
+            # --- Nouveau Système d'Audit Stratégique ---
+            # Au lieu de toutes les 6h, on audite à des étapes clés
+            if journee in [12, 24, 37]:
+                ranges = {12: (1, 12), 24: (13, 24), 37: (1, 36)}
+                start_j, end_j = ranges[journee]
+                print_info(f"   [IA-BOOSTER] Déclenchement audit stratégique : J{start_j} à J{end_j}")
                 try:
                     active_session = intelligence.get_cached_active_session()
-                    ai_booster.perform_cycle_audit_async(journee, active_session["id"])
-                    print_success(f"Audit du cycle J{journee} lancé en arrière-plan")
-                except Exception as audit_err:
-                    logger.warning(f"[AI-AUDIT] Erreur lancement audit : {audit_err}")
-            else:
-                print_verbose(f"   [IA-BOOSTER] Journée {journee} - En attente du prochain cycle (J10, 20, 30...)")
+                    if active_session:
+                        ai_booster.perform_cycle_audit_async(journee, active_session['id'], start_j, end_j)
+                except Exception as e:
+                    logger.error(f"Erreur déclenchement audit J{journee}: {e}")
+            
+            print_verbose(f"   [IA-BOOSTER] Journée {journee} - Analyse en cours")
         else:
             print_warning("Analyse IA Booster DESACTIVEE par utilisateur")
 
@@ -101,24 +118,24 @@ def callback_predictions_ia(journee: int):
         prisma_map = {f"{s['equipe_dom']} vs {s['equipe_ext']}": s for s in selections_prisma}
         bankroll = config.DEFAULT_BANKROLL  # Bankroll par defaut
 
+        # Récupération immédiate des soldes réels pour affichage et diagnostic
+        with database.get_db_connection() as conn:
+            from src.core.zeus_finance import get_zeus_bankroll
+            from src.core.prisma_finance import get_prisma_bankroll
+            
+            br_zeus = get_zeus_bankroll(conn=conn)
+            br_prisma = get_prisma_bankroll()
+
         if selections_prisma:
             table_prisma = create_table(
-                ["Match", "Pred.", "Base", "IA Boost", "Final"],
+                ["Match", "Pred.", "Base"],
                 title=f"PRISMA x GEMINI - ANALYSE J{journee_prediction}",
             )
             for p in selections_prisma:
-                boost = p.get("boost_ia", 0.0)
-                boost_str = (
-                    f"[bold green]{boost:+.1f}[/]"
-                    if boost > 0
-                    else f"[bold red]{boost:+.1f}[/]" if boost < 0 else "[dim]0.0[/]"
-                )
                 table_prisma.add_row(
                     f"{p['equipe_dom']} vs {p['equipe_ext']}",
                     f"[bold]{p['prediction']}[/]",
                     f"{p['score_base']:.1f}",
-                    boost_str,
-                    f"[bold cyan]{p['fiabilite']:.1f}[/]",
                 )
             console.print(table_prisma)
 
@@ -170,20 +187,14 @@ def callback_predictions_ia(journee: int):
                 mise_str = f"{z_sel['mise_ar']:,} Ar" if z_sel["pari_type"] != "Aucun" else "-"
                 table.add_row(match_name, fiab_str, decision_zeus, mise_str)
             console.print(table)
-            with database.get_db_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT bankroll_apres FROM historique_paris WHERE strategie = 'ZEUS' ORDER BY id_pari DESC LIMIT 1"
-                )
-                row = cursor.fetchone()
-                bankroll = row["bankroll_apres"] if row else config.DEFAULT_BANKROLL
-                console.print(f"   [bold white]Bankroll ZEUS estimé :[/] [bold green]{bankroll:,} Ar[/]")
+            console.print(f"   [bold white]Portefeuille [green]ZEUS[/]   :[/][bold green] {br_zeus:,} Ar[/]")
+            console.print(f"   [bold white]Portefeuille [magenta]PRISMA[/] :[/][bold magenta] {br_prisma:,} Ar[/]")
         else:
             print_warning(f"Aucune analyse ZEUS disponible pour J{journee_prediction}")
 
         from src.core.prisma_finance import is_prisma_stop_loss_active
 
-        if is_prisma_stop_loss_active() or bankroll < config.BANKROLL_STOP_LOSS:
+        if is_prisma_stop_loss_active() or br_zeus < config.BANKROLL_STOP_LOSS:
             console.print()
             console.print(
                 create_panel(
@@ -230,6 +241,7 @@ def listen_for_commands():
 
     while True:
         try:
+            import keyboard
             if keyboard.is_pressed("v"):
                 toggle_verbose_mode()
                 time.sleep(1)  # Éviter les déclenchements multiples
@@ -263,6 +275,10 @@ def setup_logging_mode():
         print_success("Mode Simple activé par défaut (appuyez sur 'v' pour basculer, 'x' pour mode simple)")
     else:
         print_info("Mode Headless détecté (Clavier non disponible)")
+
+
+# L'audit automatique par thread a été remplacé par des déclencheurs
+# basés sur les journées (J12, J24, J37) dans callback_predictions_ia.
 
 
 def main():
@@ -304,6 +320,10 @@ def main():
             print_info("Entraînement ML requis, lancement en arrière-plan...")
     except Exception as e:
         logger.warning(f"Validation demarrage non bloquante : {e}")
+    
+    # Audit automatique activé par cycles de journées (J12, J24, J37)
+    print_success("Système d'audit stratégique initialisé (J12, J24, J37)")
+    
     print_step(f"Demarrage de l'API FastAPI sur {api_host}:{api_port}")
     start_api_server(api_host, api_port)
     print_success("API disponible pour le frontend mobile")

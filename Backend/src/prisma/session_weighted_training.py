@@ -141,13 +141,13 @@ def extract_weighted_training_data(conn, current_session_id: int, min_matches: i
             }
             
             # Ajouter le bonus H2H
-            from . import analyzers
+            from prisma import analyzers
             data['bonus_h2h'] = analyzers.analyser_confrontations_directes_prisma(
                 cursor, match['session_id'], match['equipe_dom_id'], match['equipe_ext_id']
             )
             
             # Extraire les features
-            from . import xgboost_features
+            from prisma import xgboost_features
             feat_values = xgboost_features._extract_features_list(data, conn)
             
             # Ajouter les données pondérées
@@ -163,10 +163,10 @@ def extract_weighted_training_data(conn, current_session_id: int, min_matches: i
     df = pd.DataFrame(weighted_data, columns=xgboost_features.FEATURE_NAMES)
     y = np.array(weighted_labels, dtype=np.int32)
     
-    # XGBoost ne supporte pas les chaînes. On garde seulement les 31 premières features.
+    # XGBoost ne supporte pas les chaînes. On garde seulement les features numériques (toutes sauf les formes raw).
     if hasattr(df, 'iloc'):
-        # Garder seulement les 31 premières features (jusqu'à diff_momentum5 inclus)
-        X = df.iloc[:, :31].values.astype('float32')
+        # On ne slice plus à 31, on garde tout ce qui est numérique
+        X = df.drop(columns=['forme_raw_dom', 'forme_raw_ext'], errors='ignore').values.astype('float32')
     
     # Calculer les statistiques de pondération
     total_samples = len(weighted_labels)

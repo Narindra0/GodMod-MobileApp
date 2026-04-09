@@ -28,12 +28,14 @@ class TrainingTrigger:
         """
         try:
             # Charger les métadonnées du modèle
-            from . import xgboost_model, catboost_model
+            from prisma import xgboost_model, catboost_model, lightgbm_model
             
             if model_name == 'xgboost':
-                metadata = xgboost_model.get_model_metadata()
+                metadata = xgboost_model.get_model_info()
             elif model_name == 'catboost':
-                metadata = catboost_model.get_model_metadata()
+                metadata = catboost_model.get_model_info()
+            elif model_name == 'lightgbm':
+                metadata = lightgbm_model.get_model_info()
             else:
                 logger.error(f"[TRIGGERS] Modèle inconnu: {model_name}")
                 return {}
@@ -161,6 +163,39 @@ class TrainingTrigger:
             logger.error(f"[TRIGGERS] Erreur vérification volume: {e}")
             return False, ""
     
+    def check_feature_count_trigger(self, model_name: str) -> Tuple[bool, str]:
+        """
+        Vérifie si le modèle sur disque a un nombre de features cohérent.
+        Force le réentraînement si on détecte un ancien modèle (ex: 31 features).
+        """
+        try:
+            from prisma import xgboost_model, catboost_model, lightgbm_model
+            
+            if model_name == 'xgboost':
+                info = xgboost_model.get_model_info()
+                expected = 57
+            elif model_name == 'catboost':
+                info = catboost_model.get_model_info()
+                expected = 59
+            elif model_name == 'lightgbm':
+                info = lightgbm_model.get_model_info()
+                expected = 57
+            else:
+                return False, ""
+                
+            actual_count = info.get('features_count', 0)
+            
+            # Si le modèle existe mais n'a pas le bon format
+            if actual_count > 0 and actual_count != expected:
+                reason = f"Structure obsolète: {actual_count} features (attendu: {expected}). Réentraînement forcé."
+                logger.warning(f"[TRIGGERS] ⚠️ {model_name.upper()} {reason}")
+                return True, reason
+                
+            return False, ""
+        except Exception as e:
+            logger.error(f"[TRIGGERS] Erreur check structure {model_name}: {e}")
+            return False, ""
+
     def evaluate_all_triggers(self, model_name: str, current_session_id: int, current_day: int) -> Dict:
         """
         Évalue tous les triggers et décide du réentraînement.
@@ -273,7 +308,8 @@ def should_retrain_models(conn, current_session_id: int, current_day: int) -> Di
     
     decisions = {
         'xgboost': trigger_manager.evaluate_all_triggers('xgboost', current_session_id, current_day),
-        'catboost': trigger_manager.evaluate_all_triggers('catboost', current_session_id, current_day)
+        'catboost': trigger_manager.evaluate_all_triggers('catboost', current_session_id, current_day),
+        'lightgbm': trigger_manager.evaluate_all_triggers('lightgbm', current_session_id, current_day)
     }
     
     return decisions

@@ -1,7 +1,10 @@
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
+import logging
 
-from src.core.session_manager import get_active_session
+from core.session_manager import get_active_session
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -97,7 +100,7 @@ def create_session(capital_initial: int, type_session: str, version_ia: str, con
 def set_stop_loss_override(session_id: int, override: bool, conn: Any):
     cursor = conn.cursor()
     cursor.execute("UPDATE sessions SET stop_loss_override = %s WHERE id = %s", (override, session_id))
-    conn.commit()
+    # Ne pas committer ici : le context manager get_db_connection() s'en charge
 
 
 def enregistrer_pari(record: PariRecord, conn: Any) -> int:
@@ -212,6 +215,8 @@ def check_new_season_available(conn: Any) -> bool:
 
 
 def valider_paris_zeus(conn: Any):
+    active_session = get_active_session()
+    session_id = active_session["id"]
     cursor = conn.cursor()
     query = """
         SELECT
@@ -228,9 +233,11 @@ def valider_paris_zeus(conn: Any):
         FROM historique_paris hp
         JOIN predictions p ON hp.prediction_id = p.id
         JOIN matches m ON p.match_id = m.id
-        WHERE hp.resultat IS NULL AND m.status = 'TERMINE'
+        WHERE hp.resultat IS NULL
+        AND m.status = 'TERMINE'
+        AND hp.session_id = %s
     """
-    cursor.execute(query)
+    cursor.execute(query, (session_id,))
     paris_en_attente = cursor.fetchall()
     # Grouper par session et stratégie pour suivre les bankrolls séparément
     batches = {}
@@ -241,28 +248,13 @@ def valider_paris_zeus(conn: Any):
         batches[key].append(p)
 
     for (sess_id, strat), p_sess in batches.items():
-        # Trouver le dernier capital pour CETTE stratégie dans CETTE session
-        cursor.execute(
-            """
-            SELECT bankroll_apres FROM historique_paris
-            WHERE session_id = %s AND strategie = %s AND resultat IS NOT NULL
-            ORDER BY id_pari DESC LIMIT 1
-        """,
-            (sess_id, strat),
-        )
-        row = cursor.fetchone()
-
-        if not row:
-            if strat == "ZEUS":
-                cursor.execute("SELECT capital_initial FROM sessions WHERE id = %s", (sess_id,))
-                row_sess = cursor.fetchone()
-                current_bankroll = row_sess["capital_initial"] if row_sess else 20000
-            else:
-                from src.core.prisma_finance import get_prisma_bankroll
-
-                current_bankroll = get_prisma_bankroll()
+        # Utiliser maintenant le portefeuille GLOBAL pour chaque stratégie
+        if strat == "ZEUS":
+            from core.zeus_finance import get_zeus_bankroll
+            current_bankroll = get_zeus_bankroll(conn=conn)
         else:
-            current_bankroll = row["bankroll_apres"]
+            from core.prisma_finance import get_prisma_bankroll
+            current_bankroll = get_prisma_bankroll()
         for p in p_sess:
             is_win = False
             sd, se = p["score_dom"], p["score_ext"]
@@ -302,6 +294,9 @@ def valider_paris_zeus(conn: Any):
             )
 
             if strat == "ZEUS":
+                from core.zeus_finance import update_zeus_bankroll
+                update_zeus_bankroll(current_bankroll, conn=conn)
+
                 delta_score = 1 if is_win else -1
                 cursor.execute("UPDATE sessions SET score_zeus = score_zeus + %s WHERE id = %s", (delta_score, sess_id))
 
@@ -320,14 +315,20 @@ def valider_paris_zeus(conn: Any):
                         cursor.execute(
                             "UPDATE sessions SET dette_zeus = dette_zeus - %s WHERE id = %s", (remboursement, sess_id)
                         )
-                        print(f"💰 ZEUS a remboursé progressivement {remboursement} Ar de sa dette.")
+                        logger.info(f"ZEUS a remboursé progressivement {remboursement} Ar de sa dette.")
             else:
-                from src.core.prisma_finance import update_prisma_bankroll
-
-                update_prisma_bankroll(sess_id, current_bankroll, p["mise_ar"], resultat_val, p["cote_jouee"])
+                # Fix: Mise à jour du bankroll PRISMA directement dans la même transaction
+                # (update_prisma_bankroll ouvrait une 2e connexion → risque de deadlock)
+                cursor.execute(
+                    "INSERT INTO prisma_config (key, value_int, last_update) "
+                    "VALUES ('bankroll_prisma', %s, CURRENT_TIMESTAMP) "
+                    "ON CONFLICT (key) DO UPDATE SET value_int = EXCLUDED.value_int, last_update = CURRENT_TIMESTAMP",
+                    (int(current_bankroll),)
+                )
                 delta_score = 5 if is_win else -8
                 cursor.execute(
                     "UPDATE sessions SET score_prisma = score_prisma + %s WHERE id = %s", (delta_score, sess_id)
                 )
-    conn.commit()
-    print(f"✅ {len(paris_en_attente)} paris simples validés.")
+    # Le context manager get_db_connection() commit automatiquement
+    # Ne pas appeler conn.commit() ici pour éviter le double commit
+    logger.info(f"{len(paris_en_attente)} paris simples validés.")

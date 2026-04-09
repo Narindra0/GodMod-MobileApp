@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.11-slim
 
 # Éviter la génération de fichiers .pyc et activer le mode non-interactif
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -9,6 +9,7 @@ WORKDIR /app
 
 # Installer les dépendances système nécessaires (psycopg2, etc.)
 RUN apt-get update && apt-get install -y \
+    git \
     build-essential \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*

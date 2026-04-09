@@ -1,6 +1,9 @@
 import logging
 import numpy as np
-from . import analyzers
+import sys
+import os
+from prisma import analyzers
+from prisma.market_features import MarketFeatureExtractor, MARKET_FEATURE_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -21,15 +24,25 @@ FEATURE_NAMES = [
     'session_position',
     'momentum5_dom', 'momentum5_ext', 'diff_momentum5',
     'forme_raw_dom', 'forme_raw_ext',  # Pour CatBoost
-    # Nouvelles features avancées
+    # Features avancées de classement
     'rang_classement_dom', 'rang_classement_ext',
     'ecart_leader_dom', 'ecart_leader_ext',
     'zone_classement_dom', 'zone_classement_ext',
     'pression_fin_session',
-    'force_relative_dom_ext'  # Matrice de force relative
+    'force_relative_dom_ext',  # Matrice de force relative
+    # NOUVELLES: Features de marché avancées
+    'overround', 'entropy', 'odds_spread', 'odds_ratio',
+    'market_confidence', 'market_anomaly_score',
+    'prob_deviation_1', 'prob_deviation_x', 'prob_deviation_2',
+    'value_score_1', 'value_score_x', 'value_score_2', 'max_value_score',
+    'kelly_fraction_1', 'kelly_fraction_x', 'kelly_fraction_2',
+    'odds_range_class', 'is_balanced_market'
 ]
 
 # Mapping des labels pour la classification multiclasse
+# Caractéristiques numériques seulement (pour XGBoost et LightGBM)
+NUMERIC_FEATURE_NAMES = [name for name in FEATURE_NAMES if name not in ['forme_raw_dom', 'forme_raw_ext']]
+
 LABEL_MAP = {'1': 0, 'X': 1, '2': 2}
 LABEL_MAP_INV = {0: '1', 1: 'X', 2: '2'}
 
@@ -106,12 +119,31 @@ def _calc_momentum_5(forme_str):
 
 
 def _extract_features_list(data: dict, conn=None) -> list:
-    """Extrait la liste brute des features (39 éléments avec nouvelles features)."""
-    pts_dom = _safe_float(data.get('pts_dom'))
-    pts_ext = _safe_float(data.get('pts_ext'))
+    """Extrait la liste brute des features (57 éléments avec nouvelles features de marché)."""
+    # Sécurité: vérifier que pts_dom et pts_ext sont des nombres
+    def safe_int(val):
+        try:
+            return int(float(val)) if val is not None else 0
+        except (ValueError, TypeError):
+            return 0
     
-    forme_dom_str = data.get('forme_dom', '')
-    forme_ext_str = data.get('forme_ext', '')
+    # Récupération des valeurs avec gestion d'erreur renforcée
+    pts_dom_raw = data.get('pts_dom')
+    pts_ext_raw = data.get('pts_ext')
+    
+    # Si les valeurs sont des strings qui ressemblent à des formes (V, N, D), on met 0
+    if isinstance(pts_dom_raw, str) and len(pts_dom_raw) >= 4 and all(c in 'VND' for c in pts_dom_raw):
+        pts_dom = 0
+    else:
+        pts_dom = safe_int(pts_dom_raw)
+    
+    if isinstance(pts_ext_raw, str) and len(pts_ext_raw) >= 4 and all(c in 'VND' for c in pts_ext_raw):
+        pts_ext = 0
+    else:
+        pts_ext = safe_int(pts_ext_raw)
+    
+    forme_dom_str = data.get('forme_dom', '') or ''
+    forme_ext_str = data.get('forme_ext', '') or ''
     
     forme_dom_score = float(analyzers.pondere_forme_prisma(forme_dom_str))
     forme_ext_score = float(analyzers.pondere_forme_prisma(forme_ext_str))
@@ -138,7 +170,7 @@ def _extract_features_list(data: dict, conn=None) -> list:
     ecart_cotes = abs(cote_1 - cote_2)
     bonus_h2h = _safe_float(data.get('bonus_h2h'))
     
-    # Nouvelles features ML issues de l'expertise métier
+    # Features ML issues de l'expertise métier
     match_equilibre = 1.0 if analyzers.detecter_match_equilibre_prisma(cote_1, cote_x, cote_2) else 0.0
     cotes_suspectes = float(analyzers.analyser_cotes_suspectes_prisma(cote_1, cote_x, cote_2))
     
@@ -148,7 +180,7 @@ def _extract_features_list(data: dict, conn=None) -> list:
     momentum5_dom = _calc_momentum_5(forme_dom_str)
     momentum5_ext = _calc_momentum_5(forme_ext_str)
     
-    # --- Nouvelles features avancées ---
+    # --- Features avancées de classement ---
     rang_dom = 11
     rang_ext = 11
     ecart_leader_dom = 0
@@ -175,7 +207,11 @@ def _extract_features_list(data: dict, conn=None) -> list:
             ecart_leader_ext = pos_ext['ecart_leader']
             
             # Force relative depuis la matrice
-            from .team_strength_matrix import get_relative_strength
+            try:
+                from prisma.team_strength_matrix import get_relative_strength
+            except ImportError:
+                sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+                from prisma.team_strength_matrix import get_relative_strength
             force_relative = get_relative_strength(equipe_dom_id, equipe_ext_id)
             
         except Exception as e:
@@ -188,7 +224,19 @@ def _extract_features_list(data: dict, conn=None) -> list:
     # Pression fin de session
     pression = _calc_pression_fin_session(journee)
     
+    # --- NOUVELLES: Features de marché avancées ---
+    market_extractor = MarketFeatureExtractor(conn)
+    market_features = market_extractor.extract_all_market_features({
+        'cote_1': cote_1,
+        'cote_x': cote_x,
+        'cote_2': cote_2,
+        'equipe_dom_id': data.get('equipe_dom_id'),
+        'equipe_ext_id': data.get('equipe_ext_id'),
+        'session_id': data.get('session_id')
+    })
+    
     feat_values = [
+        # Features de base (0-20)
         pts_dom, pts_ext, pts_dom - pts_ext,
         forme_dom_score, forme_ext_score, forme_dom_score - forme_ext_score,
         momentum_dom, momentum_ext, momentum_dom - momentum_ext,
@@ -196,23 +244,51 @@ def _extract_features_list(data: dict, conn=None) -> list:
         bp_dom, bc_dom, bp_ext, bc_ext,
         bp_dom - bp_ext, bc_ext - bc_dom,
         cote_1, cote_x, cote_2,
+        # Probabilités et features cotes (21-28)
         prob_1, prob_x, prob_2,
         ecart_cotes,
         bonus_h2h,
         match_equilibre,
         cotes_suspectes,
         session_position,
+        # Momentum (29-31)
         momentum5_dom, momentum5_ext, momentum5_dom - momentum5_ext,
-        forme_dom_str, forme_ext_str,  # Raw strings
-        # Nouvelles features
+        # Forme raw pour CatBoost (32-33)
+        forme_dom_str, forme_ext_str,
+        # Features classement avancées (34-43)
         rang_dom, rang_ext,
         ecart_leader_dom, ecart_leader_ext,
         zone_dom, zone_ext,
         pression,
-        force_relative
+        force_relative,
+        # NOUVELLES: Features de marché (44-56)
+        market_features.get('overround', 0.0),
+        market_features.get('entropy', 1.0),
+        market_features.get('odds_spread', 1.0),
+        market_features.get('odds_ratio', 1.0),
+        market_features.get('market_confidence', 0.5),
+        market_features.get('market_anomaly_score', 0.0),
+        market_features.get('prob_deviation_1', 0.0),
+        market_features.get('prob_deviation_x', 0.0),
+        market_features.get('prob_deviation_2', 0.0),
+        market_features.get('value_score_1', 0.0),
+        market_features.get('value_score_x', 0.0),
+        market_features.get('value_score_2', 0.0),
+        market_features.get('max_value_score', 0.0),
+        market_features.get('kelly_fraction_1', 0.0),
+        market_features.get('kelly_fraction_x', 0.0),
+        market_features.get('kelly_fraction_2', 0.0),
+        market_features.get('odds_range_class', 2.0),
+        market_features.get('is_balanced_market', 1.0)
     ]
 
     return feat_values
+
+def get_numeric_features(feat_values):
+    """Filtre les features pour ne garder que le向量 numérique (57 éléments)."""
+    # Indices 31 et 32 sont forme_raw_dom et forme_raw_ext
+    return feat_values[:31] + feat_values[33:]
+
 
 def extract_features(data: dict, as_dataframe: bool = False, conn=None):
     """
@@ -232,8 +308,11 @@ def extract_features(data: dict, as_dataframe: bool = False, conn=None):
         import pandas as pd
         return pd.DataFrame([feat_values], columns=FEATURE_NAMES)
     
-    # Pour XGBoost (numérique seulement: 31 premières features numériques, exclut les 2 strings)
-    numeric_features = feat_values[:31]  # Jusqu'à 'diff_momentum5' inclus
+    # Pour XGBoost (numérique seulement: 57 features, exclut les 2 strings forme_raw)
+    # Features 0-30: base features (numériques)
+    # Features 31-32: forme_raw strings (à exclure pour XGBoost)
+    # Features 33-56: features avancées (numériques)
+    numeric_features = feat_values[:31] + feat_values[33:]  # Exclut indices 31-32 (strings)
     return np.array(numeric_features, dtype=np.float32)
 
 

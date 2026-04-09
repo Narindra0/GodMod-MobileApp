@@ -1,14 +1,18 @@
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Query
-from src.core import config
-from src.core.database import get_db_connection
-from src.core.session_manager import get_active_session
+from core import config
+from core.database import get_db_connection
+from core.session_manager import get_active_session
 
-from .models import AiSettingsUpdate, BorrowRequest, OverrideRequest, PrismaSettingsUpdate, ResetRequest
+from .models import AiSettingsUpdate, BorrowRequest, OverrideRequest, PrismaSettingsUpdate, ResetRequest, AuditTriggerRequest
 
 logger = logging.getLogger("server")
+
+# Clé secrète admin (définir ADMIN_SECRET_KEY dans .env pour activer la protection)
+ADMIN_SECRET_KEY = os.getenv("ADMIN_SECRET_KEY", "")
 
 
 def execute_prediction_query(cursor, query: str, params: tuple = ()) -> List[Dict[str, Any]]:
@@ -77,11 +81,21 @@ def parse_ai_analysis(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 def get_prisma_bankroll():
     """Read PRISMA bankroll from database via prisma_finance"""
     try:
-        from src.core.prisma_finance import get_prisma_bankroll as get_bankroll_from_core
+        from core.prisma_finance import get_prisma_bankroll as get_bankroll_from_core
 
         return get_bankroll_from_core()
     except Exception as e:
         logger.error(f"Error reading PRISMA bankroll: {e}")
+        return config.DEFAULT_BANKROLL
+
+def get_zeus_bankroll():
+    """Read ZEUS bankroll from database via zeus_finance"""
+    try:
+        from core.zeus_finance import get_zeus_bankroll as get_zeus_from_core
+
+        return get_zeus_from_core()
+    except Exception as e:
+        logger.error(f"Error reading ZEUS bankroll: {e}")
         return config.DEFAULT_BANKROLL
 
 
@@ -124,6 +138,33 @@ def register_routes(app: FastAPI) -> None:
             logger.error(f"Erreur lors de la récupération de l'audit : {e}")
             raise HTTPException(status_code=500, detail=f"Erreur DB: {str(e)}")
 
+    @app.post("/admin/audit/trigger")
+    async def trigger_cycle_audit(request: AuditTriggerRequest):
+        # Vérification de la clé secrète si définie dans .env
+        if ADMIN_SECRET_KEY and request.secret_key != ADMIN_SECRET_KEY:
+            raise HTTPException(status_code=403, detail="Clé d'administration invalide.")
+            
+        try:
+            from src.analysis.ai_booster import perform_cycle_audit_async
+            active_session = get_active_session()
+            session_id = active_session["id"]
+            
+            # Utiliser la journée fournie ou reculer à la dernière journée active
+            journee = request.journee if request.journee else active_session.get("current_day", 10)
+            
+            # Lancement asynchrone explicite
+            logger.info(f"[API] Déclenchement manuel de l'audit IA pour J{journee}")
+            perform_cycle_audit_async(journee, session_id)
+            
+            return {
+                "status": "success", 
+                "message": f"Audit de la journée {journee} lancé en arrière-plan.",
+                "session_id": session_id
+            }
+        except Exception as e:
+            logger.error(f"Erreur déclenchement audit: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
     @app.get("/settings/ai")
     async def get_ai_settings():
         try:
@@ -147,7 +188,7 @@ def register_routes(app: FastAPI) -> None:
                         "ON CONFLICT (key) DO UPDATE SET value_int = EXCLUDED.value_int",
                         (val,),
                     )
-                    conn.commit()
+                    # Le context manager commit automatiquement
                     return {"status": "success", "enabled": settings.enabled}
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Erreur DB: {str(e)}")
@@ -176,7 +217,7 @@ def register_routes(app: FastAPI) -> None:
                         "ON CONFLICT (key) DO UPDATE SET value_int = EXCLUDED.value_int",
                         (val,),
                     )
-                    conn.commit()
+                    # Le context manager commit automatiquement
                     return {"status": "success", "ensemble_enabled": settings.ensemble_enabled}
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Erreur DB: {str(e)}")
@@ -215,8 +256,7 @@ def register_routes(app: FastAPI) -> None:
                 """,
                     (session_id, None, 0, "EMPRUNT", 0, request.amount, new_bankroll, "ZEUS", 0),
                 )
-
-                conn.commit()
+                # Le context manager commit automatiquement
                 return {"status": "success", "new_bankroll": new_bankroll, "debt": request.amount}
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Erreur emprunt: {str(e)}")
@@ -240,16 +280,7 @@ def register_routes(app: FastAPI) -> None:
                 wins = cursor.fetchone()["count"]
                 win_rate = (wins / total * 100) if total > 0 else 0
 
-                cursor.execute(
-                    """
-                    SELECT bankroll_apres FROM historique_paris 
-                    WHERE session_id = %s AND (strategie = 'ZEUS' OR strategie IS NULL)
-                    ORDER BY id_pari DESC LIMIT 1
-                """,
-                    (session_id,),
-                )
-                row_zeus = cursor.fetchone()
-                bankroll_zeus = row_zeus["bankroll_apres"] if row_zeus else active_session["capital_initial"]
+                bankroll_zeus = get_zeus_bankroll()
 
                 bankroll_prisma = get_prisma_bankroll()
 
@@ -515,6 +546,9 @@ def register_routes(app: FastAPI) -> None:
     async def reset_database_api(request: ResetRequest):
         if request.confirmation != "RESET":
             raise HTTPException(status_code=400, detail="Confirmation invalide. RESET requis.")
+        # Vérification de la clé secrète si définie dans .env
+        if ADMIN_SECRET_KEY and request.secret_key != ADMIN_SECRET_KEY:
+            raise HTTPException(status_code=403, detail="Clé d'administration invalide.")
         try:
             with get_db_connection(write=True) as conn:
                 cursor = conn.cursor()
@@ -535,26 +569,68 @@ def register_routes(app: FastAPI) -> None:
                     cursor.execute(f"SELECT COUNT(*) FROM {t}")
                     deleted[t] = cursor.fetchone()["count"]
                     cursor.execute(f"DELETE FROM {t}")
+                # Initialisation des capitaux par défaut pour les deux stratégies
+                for strat_key in ['bankroll_prisma', 'bankroll_zeus']:
+                    cursor.execute(
+                        "INSERT INTO prisma_config (key, value_int) VALUES (%s, %s) "
+                        "ON CONFLICT (key) DO UPDATE SET value_int = EXCLUDED.value_int",
+                        (strat_key, config.DEFAULT_BANKROLL),
+                    )
+                # Réinitialiser les configs par défaut
                 cursor.execute(
-                    "INSERT INTO prisma_config (key, value_int) VALUES ('bankroll', %s) ON CONFLICT (key) DO UPDATE SET value_int = EXCLUDED.value_int",
-                    (config.DEFAULT_BANKROLL,),
+                    "INSERT INTO prisma_config (key, value_int) VALUES ('ai_enabled', 1) "
+                    "ON CONFLICT (key) DO UPDATE SET value_int = EXCLUDED.value_int"
+                )
+                cursor.execute(
+                    "INSERT INTO prisma_config (key, value_int) VALUES ('ensemble_enabled', 1) "
+                    "ON CONFLICT (key) DO UPDATE SET value_int = EXCLUDED.value_int"
                 )
                 cursor.execute("SELECT COUNT(*) FROM equipes")
                 equipes_count = cursor.fetchone()["count"]
-                conn.commit()
-                return {"success": True, "deleted_counts": deleted, "preserved_teams": equipes_count}
+                # Le context manager commit automatiquement
+            # Fix #1 : Invalider le cache de session après le reset
+            # Sans ça, PRISMA continuerait à utiliser l'ancien session_id supprimé
+            from src.analysis.intelligence import vider_cache_intelligence
+            vider_cache_intelligence()
+            logger.info("[RESET] Cache intelligence invalidé après reset.")
+            return {"success": True, "deleted_counts": deleted, "preserved_teams": equipes_count}
         except Exception as e:
             logger.error(f"Reset error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
     @app.post("/admin/override-stop-loss")
     async def override_stop_loss_api(request: OverrideRequest):
+        # Vérification de la clé secrète si définie dans .env
+        if ADMIN_SECRET_KEY and request.secret_key != ADMIN_SECRET_KEY:
+            raise HTTPException(status_code=403, detail="Clé d'administration invalide.")
         try:
             with get_db_connection(write=True) as conn:
                 from src.zeus.database.queries import set_stop_loss_override
-
                 set_stop_loss_override(request.session_id, request.override, conn)
                 return {"status": "success", "override": request.override}
         except Exception as e:
             logger.error(f"Override error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/prisma/training-status")
+    async def get_training_status():
+        try:
+            # Récupérer l'état sans charger de gros modèle (immédiat)
+            from prisma.training_status import status_manager
+            return status_manager.get_status()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Erreur status: {str(e)}")
+
+    @app.get("/prisma/dashboard")
+    async def get_prisma_dashboard():
+        from fastapi.responses import HTMLResponse
+        import os
+        
+        # Chemin absolu vers le ficher html d'interface dans le dossier tools
+        html_path = os.path.join(os.path.dirname(__file__), "..", "..", "tools", "prisma_dashboard.html")
+        try:
+            with open(html_path, "r", encoding="utf-8") as f:
+                html_content = f.read()
+            return HTMLResponse(content=html_content)
+        except Exception as e:
+            return HTMLResponse(content=f"<h1>Erreur : Fichier Dashboard introuvable</h1><p>{e}</p>", status_code=404)

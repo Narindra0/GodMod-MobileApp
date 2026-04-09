@@ -1,0 +1,76 @@
+{
+  "audit": {
+    "status": "success",
+    "report_path": "audit_results.json",
+    "timestamp": "2026-04-07T14:46:53.118806"
+  },
+  "training": {
+    "status": "success",
+    "timestamp": "2026-04-07T14:47:44.900726"
+  },
+  "validation": {
+    "status": "success",
+    "results": {
+      "backtest_baseline": "ValidationResult(strategy_name='xgboost', total_matches=615, accuracy=1.0, log_loss=0.13610567887879618, brier_score=np.float64(0.008950484158610631), precision_1=1.0, precision_x=1.0, precision_2=1.0, recall_1=1.0, recall_x=1.0, recall_2=1.0, f1_macro=1.0, profit_simulation=93924.0, sharpe_ratio=np.float64(33.014233509452666), max_drawdown=0)",
+      "backtest_new": "ValidationResult(strategy_name='ensemble', total_matches=464, accuracy=1.0, log_loss=0.11804037345712198, brier_score=np.float64(0.008350406946600176), precision_1=1.0, precision_x=1.0, precision_2=1.0, recall_1=1.0, recall_x=1.0, recall_2=1.0, f1_macro=1.0, profit_simulation=70915.0, sharpe_ratio=np.float64(43.49565708341478), max_drawdown=0)",
+      "walk_forward": [],
+      "ab_test": {
+        "baseline": "ValidationResult(strategy_name='xgboost', total_matches=456, accuracy=1.0, log_loss=0.13470727853959208, brier_score=np.float64(0.008504746239064859), precision_1=1.0, precision_x=1.0, precision_2=1.0, recall_1=1.0, recall_x=1.0, recall_2=1.0, f1_macro=1.0, profit_simulation=69472.0, sharpe_ratio=np.float64(42.83519335376363), max_drawdown=0)",
+        "new": "ValidationResult(strategy_name='ensemble', total_matches=464, accuracy=1.0, log_loss=0.11804037345712198, brier_score=np.float64(0.008350406946600176), precision_1=1.0, precision_x=1.0, precision_2=1.0, recall_1=1.0, recall_x=1.0, recall_2=1.0, f1_macro=1.0, profit_simulation=70915.0, sharpe_ratio=np.float64(43.49565708341478), max_drawdown=0)",
+        "improvements": {
+          "accuracy_delta": 0.0,
+          "logloss_delta": 0.016666905082470096,
+          "brier_delta": 0.00015433929246468255,
+          "profit_delta": 1443.0
+        }
+      },
+      "timestamp": "2026-04-07T14:47:44.934972"
+    },
+    "timestamp": "2026-04-07T14:53:35.654818"
+  },
+  "feedback": {
+    "status": "success",
+    "error_analysis": {
+      "total_analyzed": 11,
+      "accuracy": 0.9090909090909091,
+      "errors_by_type": {
+        "standard_error": 1
+      },
+      "errors_by_confidence": {
+        "high": 1,
+        "medium": 0,
+        "low": 0
+      },
+      "errors_by_odds_range": {
+        "balanced": 1
+      },
+      "confidence_calibration": {
+        "overconfident": 1,
+        "underconfident": 0,
+        "calibrated": 10
+      },
+      "model_contributions": {
+        "xgboost": {
+          "correct": 10,
+          "total": 11
+        },
+        "catboost": {
+          "correct": 10,
+          "total": 11
+        }
+      },
+      "drift_detected": false,
+      "recommendations": []
+    },
+    "adjusted_weights": {
+      "xgboost": 0.5,
+      "catboost": 0.5
+    },
+    "drift_detected": false,
+    "timestamp": "2026-04-07T14:53:35.729163"
+  },
+  "monitoring": {
+    "status": "error",
+    "message": "unsupported operand type(s) for +: 'float' and 'decimal.Decimal'"
+  }
+}

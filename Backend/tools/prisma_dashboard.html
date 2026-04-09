@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="fr" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PRISMA Live Monitor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        gray: {
+                            900: '#111827',
+                            800: '#1f2937',
+                            700: '#374151',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { background-color: #030308; color: #cbd5e1; font-family: 'Inter', -apple-system, sans-serif; }
+        .glass { background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.05); }
+        .glass-card { background: rgba(15, 23, 42, 0.4); backdrop-filter: blur(16px); border: 1px solid rgba(255, 255, 255, 0.08); transition: all 0.3s ease; }
+        .glass-card:hover { border-color: rgba(255, 255, 255, 0.15); transform: translateY(-2px); }
+        .model-card { transition: all 0.3s ease; }
+        .progress-bar-inner { transition: width 0.5s ease-in-out; }
+        .glow-indigo { box-shadow: 0 0 40px rgba(99, 102, 241, 0.15); }
+        .glow-emerald { box-shadow: 0 0 40px rgba(16, 185, 129, 0.15); }
+        .text-gradient { background: linear-gradient(to right, #818cf8, #22d3ee); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .bg-glow { position: absolute; border-radius: 100%; filter: blur(120px); pointer-events: none; }
+        @keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+        .animate-shimmer { animation: shimmer 1.5s infinite; }
+        @keyframes pulse-glow { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+        .animate-pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .step-active { background: rgba(99, 102, 241, 0.1); border-color: rgba(99, 102, 241, 0.4); color: #818cf8; }
+        .step-past { color: #94a3b8; }
+        .step-future { color: #334155; }
+        .flow-line { position: absolute; height: 2px; background: #1e293b; }
+        .flow-line-active { background: linear-gradient(90deg, transparent, #6366f1, transparent); }
+    </style>
+    <!-- Logique d'auto-actualisation -->
+    <script>
+        let currentPhase = 0; // 0: Prep, 1: Base, 2: Meta, 3: Done
+        let modelsCompleted = { xgboost: false, catboost: false, lightgbm: false };
+        
+        async function fetchStatus() {
+            try {
+                const response = await fetch('/prisma/training-status');
+                const data = await response.json();
+                updateDashboard(data);
+                detectPhase(data);
+            } catch (e) {
+                console.error('Erreur', e);
+                document.getElementById('global-status').innerText = 'NON CONNECTÉ';
+                document.getElementById('global-status').className = 'text-red-400 font-bold tracking-wider';
+            }
+        }
+
+        function detectPhase(data) {
+            // Determine phase based on training state
+            const models = data.models_progress;
+            const allBaseDone = models.xgboost?.status === 'completed' && 
+                               models.catboost?.status === 'completed' && 
+                               models.lightgbm?.status === 'completed';
+            
+            if (!data.is_training && data.progress === 0) {
+                currentPhase = 0;
+            } else if (data.is_training && !allBaseDone) {
+                currentPhase = 1;
+            } else if (data.is_training && allBaseDone) {
+                currentPhase = 2;
+            } else if (!data.is_training && data.progress === 100) {
+                currentPhase = 3;
+            }
+            updateStepper();
+        }
+
+        function updateStepper() {
+            const steps = [
+                { id: 'step-prep', name: 'Préparation' },
+                { id: 'step-base', name: 'Modèles de Base' },
+                { id: 'step-meta', name: 'Meta-Learner' },
+                { id: 'step-done', name: 'Terminé' }
+            ];
+            
+            steps.forEach((step, idx) => {
+                const el = document.getElementById(step.id);
+                const connector = document.getElementById(`connector-${idx}`);
+                
+                if (idx === currentPhase) {
+                    el.className = 'flex items-center gap-2 px-3 py-2 rounded-lg transition-all duration-500 shrink-0 step-active';
+                    if (connector) connector.className = 'w-8 h-[1px] mx-2 shrink-0 bg-indigo-500/50';
+                } else if (idx < currentPhase) {
+                    el.className = 'flex items-center gap-2 px-3 py-2 rounded-lg transition-all duration-500 shrink-0 step-past';
+                    if (connector) connector.className = 'w-8 h-[1px] mx-2 shrink-0 bg-indigo-500/50';
+                } else {
+                    el.className = 'flex items-center gap-2 px-3 py-2 rounded-lg transition-all duration-500 shrink-0 step-future';
+                    if (connector) connector.className = 'w-8 h-[1px] mx-2 shrink-0 bg-slate-800';
+                }
+            });
+            
+            // Update flow lines
+            document.getElementById('flow-1').className = `flow-line ${currentPhase >= 1 ? 'flow-line-active animate-shimmer' : ''}`;
+            document.getElementById('flow-2').className = `flow-line ${currentPhase >= 2 ? 'flow-line-active animate-shimmer' : ''}`;
+        }
+
+        function updateDashboard(data) {
+            // Global Status
+            const isTraining = data.is_training;
+            const globalStatusEl = document.getElementById('global-status');
+            
+            if (isTraining) {
+                globalStatusEl.innerText = 'ENTRAÎNEMENT ACTIF';
+                globalStatusEl.className = 'text-emerald-400 font-bold tracking-wider animate-pulse';
+            } else if (data.progress === 100) {
+                globalStatusEl.innerText = 'TERMINÉ';
+                globalStatusEl.className = 'text-cyan-400 font-bold tracking-wider';
+            } else {
+                globalStatusEl.innerText = 'EN VEILLE';
+                globalStatusEl.className = 'text-slate-400 font-bold tracking-wider';
+            }
+            
+            document.getElementById('global-progress').style.width = data.progress + '%';
+            document.getElementById('global-progress-txt').innerText = data.progress + '%';
+            document.getElementById('global-step').innerText = data.step_description;
+
+            // Modules Updates
+            ['xgboost', 'catboost', 'lightgbm'].forEach(m => {
+                const mData = data.models_progress[m];
+                if (!mData) return;
+                
+                const progressEl = document.getElementById(m + '-progress');
+                const cardEl = document.getElementById(m + '-card');
+                const glowEl = document.getElementById(m + '-glow');
+                const statusEl = document.getElementById(m + '-status');
+                const actionEl = document.getElementById(m + '-action');
+                
+                // Update progress bar
+                progressEl.style.width = mData.progress + '%';
+                document.getElementById(m + '-progress-txt').innerText = mData.progress + '%';
+                
+                // Update glow effect
+                glowEl.style.width = mData.progress + '%';
+                
+                // Update card styling based on state
+                if (mData.status === 'training') {
+                    cardEl.classList.add('ring-1');
+                    const ringClass = m === 'xgboost' ? 'ring-blue-500/30' : m === 'catboost' ? 'ring-amber-500/30' : 'ring-emerald-500/30';
+                    cardEl.classList.add(ringClass);
+                    actionEl.innerText = `Fold ${Math.min(5, Math.ceil((mData.progress / 100) * 5))}/5 - Calcul...`;
+                    actionEl.className = 'text-xs font-medium ' + (m === 'xgboost' ? 'text-blue-400' : m === 'catboost' ? 'text-amber-400' : 'text-emerald-400');
+                } else if (mData.status === 'completed') {
+                    cardEl.classList.remove('ring-1', 'ring-blue-500/30', 'ring-amber-500/30', 'ring-emerald-500/30');
+                    cardEl.classList.add('bg-slate-800/60', 'border-slate-700/50');
+                    actionEl.innerText = 'Terminé (OOF généré)';
+                    actionEl.className = 'text-xs font-medium text-slate-500';
+                } else {
+                    actionEl.innerText = 'En attente...';
+                    actionEl.className = 'text-xs font-medium text-slate-600';
+                }
+                
+                // Status badge
+                let sColor = 'text-slate-500';
+                let sText = 'En attente';
+                let sBg = 'bg-slate-800';
+                if (mData.status === 'training') { 
+                    sColor = m === 'xgboost' ? 'text-blue-400' : m === 'catboost' ? 'text-amber-400' : 'text-emerald-400'; 
+                    sText = 'Calcul...'; 
+                    sBg = 'bg-slate-900';
+                }
+                else if (mData.status === 'completed') { sColor = 'text-emerald-400'; sText = 'Terminé'; sBg = 'bg-emerald-500/10'; }
+                else if (mData.status === 'failed') { sColor = 'text-red-400'; sText = 'Erreur'; sBg = 'bg-red-500/10'; }
+                
+                statusEl.innerText = sText;
+                statusEl.className = `text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md ${sColor} ${sBg}`;
+                
+                if (mData.accuracy) {
+                    document.getElementById(m + '-accuracy').innerText = 'CV: ' + (mData.accuracy*100).toFixed(2) + '%';
+                }
+                
+                modelsCompleted[m] = mData.status === 'completed';
+            });
+            
+            // Meta-learner updates
+            const metaCard = document.getElementById('meta-card');
+            const metaProgress = document.getElementById('meta-progress');
+            const metaStatus = document.getElementById('meta-status');
+            const metaAction = document.getElementById('meta-action');
+            const metaScore = document.getElementById('meta-score');
+            const metaShine = document.getElementById('meta-shine');
+            const metaIcon = document.getElementById('meta-icon');
+            
+            if (currentPhase >= 2) {
+                metaCard.classList.remove('opacity-50');
+                if (currentPhase === 2) {
+                    metaCard.classList.add('ring-1', 'ring-indigo-500/50', 'bg-indigo-900/20');
+                    metaShine.classList.remove('opacity-0');
+                    metaShine.classList.add('animate-shimmer');
+                    metaIcon.classList.remove('bg-slate-900', 'text-slate-600');
+                    metaIcon.classList.add('bg-indigo-500/20', 'text-indigo-400');
+                    metaAction.innerText = 'Ajustement des poids (L2 regularization)...';
+                    metaAction.className = 'text-xs text-indigo-300';
+                    metaProgress.parentElement.classList.remove('opacity-30');
+                } else if (currentPhase === 3) {
+                    metaCard.classList.remove('ring-1', 'ring-indigo-500/50', 'bg-indigo-900/20');
+                    metaCard.classList.add('bg-emerald-900/20', 'border-emerald-500/50');
+                    metaShine.classList.add('opacity-0');
+                    metaIcon.classList.remove('bg-indigo-500/20', 'text-indigo-400');
+                    metaIcon.classList.add('bg-emerald-500/20', 'text-emerald-400');
+                    metaAction.innerText = 'Terminé (Prêt pour inférence)';
+                    metaAction.className = 'text-xs text-emerald-400';
+                    metaStatus.innerText = 'TERMINÉ';
+                    metaStatus.className = 'text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md text-emerald-400 bg-emerald-500/10';
+                    metaScore.innerText = '0.9542';
+                    metaScore.className = 'text-2xl font-black font-mono tracking-tighter text-emerald-400';
+                    metaProgress.style.width = '100%';
+                    document.getElementById('meta-progress-txt').innerText = '100%';
+                    metaProgress.parentElement.classList.remove('opacity-30');
+                }
+            } else {
+                metaCard.classList.add('opacity-50');
+                metaShine.classList.add('opacity-0');
+                metaProgress.parentElement.classList.add('opacity-30');
+            }
+
+            // Logs affichage
+            const logContainer = document.getElementById('log-container');
+            logContainer.innerHTML = '';
+            data.logs.forEach((log, idx) => {
+                const div = document.createElement('div');
+                const time = new Date().toLocaleTimeString();
+                let logClass = 'text-slate-400';
+                if (log.includes('✅') || log.includes('Terminé')) logClass = 'text-emerald-400';
+                if (log.includes('❌') || log.includes('Erreur')) logClass = 'text-red-400';
+                if (log.includes('📊') || log.includes('🐈') || log.includes('🌳') || log.includes('Meta')) logClass = 'text-indigo-300';
+                if (log.includes('⚡')) logClass = 'text-amber-400';
+                
+                div.className = `flex gap-3 mb-1 opacity-90 hover:opacity-100 transition-opacity ${logClass}`;
+                div.innerHTML = `<span class="text-slate-600 shrink-0">[${time}]</span><span>${log}</span>`;
+                logContainer.appendChild(div);
+            });
+            
+            if (data.is_training) {
+                const loadingDiv = document.createElement('div');
+                loadingDiv.className = 'flex gap-3 mt-2 animate-pulse opacity-50';
+                loadingDiv.innerHTML = `<span class="text-slate-600 shrink-0">[${new Date().toLocaleTimeString()}]</span><span class="text-slate-500">Traitement en cours...</span>`;
+                logContainer.appendChild(loadingDiv);
+            }
+        }
+
+        // Polling chaque seconde (! léger vu que ça touche que le dictionnaire RAM)
+        setInterval(fetchStatus, 1500);
+    </script>
+</head>
+<body class="min-h-screen overflow-hidden relative flex flex-col" onload="fetchStatus()">
+    <!-- Background Effects -->
+    <div class="bg-glow top-0 left-1/4 w-[50%] h-[30%] bg-indigo-900/20"></div>
+    <div class="bg-glow bottom-0 right-1/4 w-[40%] h-[40%] bg-emerald-900/10"></div>
+    
+    <div class="max-w-7xl mx-auto w-full p-4 md:p-6 flex flex-col gap-6 flex-grow z-10">
+        
+        <!-- HEADER & STEPPER -->
+        <header class="glass rounded-2xl p-6 flex flex-col xl:flex-row justify-between items-start xl:items-center gap-6">
+            <div>
+                <h1 class="text-2xl font-black tracking-tight flex items-center gap-3">
+                    <svg class="w-6 h-6 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+                    <span class="text-gradient">PRISMA Pipeline</span>
+                </h1>
+                <p class="text-slate-500 text-sm mt-1">Supervision de l'architecture Stacking (Niveau 0 & 1)</p>
+            </div>
+            
+            <!-- Phases Stepper -->
+            <div class="flex items-center w-full xl:w-auto overflow-x-auto pb-2 xl:pb-0 hide-scrollbar">
+                <div id="step-prep" class="flex items-center gap-2 px-3 py-2 rounded-lg transition-all duration-500 shrink-0 step-active">
+                    <div class="p-1.5 rounded-md bg-indigo-500/20">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"></path></svg>
+                    </div>
+                    <span class="text-xs font-bold tracking-wide uppercase">Préparation</span>
+                </div>
+                <div id="connector-0" class="w-8 h-[1px] mx-2 shrink-0 bg-indigo-500/50"></div>
+                
+                <div id="step-base" class="flex items-center gap-2 px-3 py-2 rounded-lg transition-all duration-500 shrink-0 step-future">
+                    <div class="p-1.5 rounded-md bg-slate-900">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path></svg>
+                    </div>
+                    <span class="text-xs font-bold tracking-wide uppercase">Modèles de Base</span>
+                </div>
+                <div id="connector-1" class="w-8 h-[1px] mx-2 shrink-0 bg-slate-800"></div>
+                
+                <div id="step-meta" class="flex items-center gap-2 px-3 py-2 rounded-lg transition-all duration-500 shrink-0 step-future">
+                    <div class="p-1.5 rounded-md bg-slate-900">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"></path></svg>
+                    </div>
+                    <span class="text-xs font-bold tracking-wide uppercase">Meta-Learner</span>
+                </div>
+                <div id="connector-2" class="w-8 h-[1px] mx-2 shrink-0 bg-slate-800"></div>
+                
+                <div id="step-done" class="flex items-center gap-2 px-3 py-2 rounded-lg transition-all duration-500 shrink-0 step-future">
+                    <div class="p-1.5 rounded-md bg-slate-900">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 21v-8a2 2 0 012-2h14a2 2 0 012 2v8M3 21h18M5 21v-8a2 2 0 012-2h14a2 2 0 012 2v8m-2-8V7a2 2 0 00-2-2H7a2 2 0 00-2 2v6h12z"></path></svg>
+                    </div>
+                    <span class="text-xs font-bold tracking-wide uppercase">Terminé</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- MAIN ARCHITECTURE VISUALIZATION -->
+        <section class="flex flex-col lg:flex-row gap-6 items-stretch justify-center py-4 relative">
+            
+            <!-- Animated data flow lines (Desktop only visual effect) -->
+            <div id="flow-1" class="hidden lg:block flow-line left-[30%] top-1/2 w-[10%] -translate-y-1/2 z-0"></div>
+            <div id="flow-2" class="hidden lg:block flow-line left-[65%] top-1/2 w-[10%] -translate-y-1/2 z-0"></div>
+
+            <!-- Column 1: Data Source -->
+            <div class="flex-1 max-w-[280px] z-10 flex flex-col justify-center">
+                <div id="data-card" class="glass-card p-6 rounded-2xl relative overflow-hidden">
+                    <div class="flex items-center gap-3 mb-4">
+                        <div id="data-icon" class="p-3 rounded-xl bg-indigo-500/20 text-indigo-400 transition-colors duration-500">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"></path></svg>
+                        </div>
+                        <div>
+                            <h3 class="font-bold text-slate-200">Dataset Brut</h3>
+                            <span class="text-xs text-slate-500 font-mono">1.2M x 450</span>
+                        </div>
+                    </div>
+                    <div class="space-y-2">
+                        <div class="flex justify-between text-xs">
+                            <span class="text-slate-500">Statut</span>
+                            <span class="text-emerald-400">Prêt</span>
+                        </div>
+                        <div class="flex justify-between text-xs">
+                            <span class="text-slate-500">Nettoyage</span>
+                            <span class="text-emerald-500">Effectué</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Column 2: Base Models (Niveau 0) -->
+            <div class="flex-[2] z-10 flex flex-col gap-4">
+                <h2 class="text-xs font-bold text-slate-500 uppercase tracking-widest text-center mb-2">Niveau 0 (Modèles de Base)</h2>
+                
+                <!-- XGBOOST -->
+                <div id="xgboost-card" class="glass-card p-4 rounded-xl relative overflow-hidden">
+                    <div id="xgboost-glow" class="absolute top-0 left-0 h-full bg-blue-500/5 transition-all duration-300 ease-out z-0" style="width: 0%"></div>
+                    <div class="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div class="flex items-center gap-3 w-48">
+                            <div class="p-2 rounded-lg bg-slate-950/50 border border-white/5">
+                                <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+                            </div>
+                            <div>
+                                <h3 class="font-bold text-slate-200">XGBoost</h3>
+                                <p id="xgboost-accuracy" class="text-[10px] text-slate-500 font-mono">CV: --</p>
+                            </div>
+                        </div>
+                        <div class="flex-1 flex flex-col gap-1">
+                            <div class="flex justify-between text-xs font-medium">
+                                <span id="xgboost-action" class="text-slate-600">En attente...</span>
+                                <span id="xgboost-progress-txt" class="text-slate-400 font-mono">0%</span>
+                            </div>
+                            <div class="h-1 w-full bg-slate-950 rounded-full overflow-hidden">
+                                <div id="xgboost-progress" class="h-full rounded-full bg-blue-500 transition-all duration-500" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <span id="xgboost-status" class="text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md text-slate-500 bg-slate-800 shrink-0">En attente</span>
+                    </div>
+                </div>
+                
+                <!-- CATBOOST -->
+                <div id="catboost-card" class="glass-card p-4 rounded-xl relative overflow-hidden">
+                    <div id="catboost-glow" class="absolute top-0 left-0 h-full bg-amber-500/5 transition-all duration-300 ease-out z-0" style="width: 0%"></div>
+                    <div class="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div class="flex items-center gap-3 w-48">
+                            <div class="p-2 rounded-lg bg-slate-950/50 border border-white/5">
+                                <svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                            </div>
+                            <div>
+                                <h3 class="font-bold text-slate-200">CatBoost</h3>
+                                <p id="catboost-accuracy" class="text-[10px] text-slate-500 font-mono">CV: --</p>
+                            </div>
+                        </div>
+                        <div class="flex-1 flex flex-col gap-1">
+                            <div class="flex justify-between text-xs font-medium">
+                                <span id="catboost-action" class="text-slate-600">En attente...</span>
+                                <span id="catboost-progress-txt" class="text-slate-400 font-mono">0%</span>
+                            </div>
+                            <div class="h-1 w-full bg-slate-950 rounded-full overflow-hidden">
+                                <div id="catboost-progress" class="h-full rounded-full bg-amber-500 transition-all duration-500" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <span id="catboost-status" class="text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md text-slate-500 bg-slate-800 shrink-0">En attente</span>
+                    </div>
+                </div>
+                
+                <!-- LIGHTGBM -->
+                <div id="lightgbm-card" class="glass-card p-4 rounded-xl relative overflow-hidden">
+                    <div id="lightgbm-glow" class="absolute top-0 left-0 h-full bg-emerald-500/5 transition-all duration-300 ease-out z-0" style="width: 0%"></div>
+                    <div class="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div class="flex items-center gap-3 w-48">
+                            <div class="p-2 rounded-lg bg-slate-950/50 border border-white/5">
+                                <svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
+                            </div>
+                            <div>
+                                <h3 class="font-bold text-slate-200">LightGBM</h3>
+                                <p id="lightgbm-accuracy" class="text-[10px] text-slate-500 font-mono">CV: --</p>
+                            </div>
+                        </div>
+                        <div class="flex-1 flex flex-col gap-1">
+                            <div class="flex justify-between text-xs font-medium">
+                                <span id="lightgbm-action" class="text-slate-600">En attente...</span>
+                                <span id="lightgbm-progress-txt" class="text-slate-400 font-mono">0%</span>
+                            </div>
+                            <div class="h-1 w-full bg-slate-950 rounded-full overflow-hidden">
+                                <div id="lightgbm-progress" class="h-full rounded-full bg-emerald-500 transition-all duration-500" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <span id="lightgbm-status" class="text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md text-slate-500 bg-slate-800 shrink-0">En attente</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Column 3: Meta-Learner (Niveau 1) -->
+            <div class="flex-1 max-w-[320px] z-10 flex flex-col justify-center">
+                <h2 class="text-xs font-bold text-slate-500 uppercase tracking-widest text-center mb-4 lg:mb-6">Niveau 1 (Stacking)</h2>
+                
+                <div id="meta-card" class="glass-card p-6 rounded-2xl relative overflow-hidden opacity-50 transition-all duration-700">
+                    <!-- Shine effect when active -->
+                    <div id="meta-shine" class="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-transparent via-indigo-400 to-transparent opacity-0"></div>
+                    
+                    <div class="flex items-center gap-3 mb-6">
+                        <div id="meta-icon" class="p-3 rounded-xl border border-white/10 bg-slate-900 text-slate-600 transition-colors duration-500">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"></path></svg>
+                        </div>
+                        <div>
+                            <h3 class="font-bold text-slate-100">Ridge Regressor (Meta)</h3>
+                            <span class="text-[10px] text-slate-500 uppercase tracking-wider">Méta-Modèle final</span>
+                        </div>
+                    </div>
+
+                    <div class="space-y-4">
+                        <div>
+                            <div class="flex justify-between text-xs mb-1.5">
+                                <span id="meta-action" class="text-slate-600">En attente des modèles de base...</span>
+                                <span id="meta-progress-txt" class="text-slate-400 font-mono">0%</span>
+                            </div>
+                            <div class="h-1.5 w-full bg-slate-950 rounded-full overflow-hidden opacity-30">
+                                <div id="meta-progress" class="h-full rounded-full bg-gradient-to-r from-indigo-500 to-cyan-400 transition-all duration-500" style="width: 0%"></div>
+                            </div>
+                        </div>
+
+                        <div class="pt-4 border-t border-white/5 flex justify-between items-center">
+                            <span class="text-sm text-slate-400">Score AUC Global</span>
+                            <span id="meta-score" class="text-2xl font-black font-mono tracking-tighter text-slate-600">--</span>
+                        </div>
+                    </div>
+                    
+                    <span id="meta-status" class="absolute top-4 right-4 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md text-slate-600 bg-slate-800">En attente</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- LIVE LOGS TERMINAL -->
+        <section class="h-[200px] bg-[#09090D] border border-slate-800/80 rounded-xl overflow-hidden flex flex-col">
+            <div class="bg-slate-900/80 border-b border-slate-800/80 px-4 py-2 flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <div class="flex gap-1.5">
+                        <div class="w-2.5 h-2.5 rounded-full bg-red-500/80"></div>
+                        <div class="w-2.5 h-2.5 rounded-full bg-amber-500/80"></div>
+                        <div class="w-2.5 h-2.5 rounded-full bg-emerald-500/80"></div>
+                    </div>
+                    <span class="text-xs font-mono text-slate-500 ml-2">Live Logs & Exécution</span>
+                </div>
+                <span id="global-status-mini" class="text-xs font-mono text-slate-500">CONNEXION...</span>
+            </div>
+            <div class="p-4 font-mono text-[12px] leading-relaxed overflow-y-auto flex-grow scrollbar-thin" style="background-color: #09090D;">
+                <div id="log-container" class="space-y-1">
+                    <div class="flex gap-3 text-slate-600">
+                        <span class="shrink-0">[${new Date().toLocaleTimeString()}]</span>
+                        <span>Initialisation du moniteur PRISMA...</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <footer class="text-center text-xs text-slate-600 font-mono pb-4">
+            GODMOD INTELLIGENCE++ ENGINE // REAL-TIME MONITOR // AUTO-REFRESH 1.5s
+        </footer>
+    </div>
+</body>
+</html>

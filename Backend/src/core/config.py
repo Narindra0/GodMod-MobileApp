@@ -9,19 +9,12 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 LOGS_DIR = os.path.join(BASE_DIR, "logs")
-ZEUS_MODEL_PATH = os.path.join(MODELS_DIR, "zeus", "best", "best_model.zip")
+ZEUS_MODEL_PATH = os.path.join(MODELS_DIR, "zeus", "zeus_v2_best.zip")
 ZEUS_LOGS_DIR = os.path.join(LOGS_DIR, "zeus")
 DEFAULT_BANKROLL = 20000
-DEFAULT_CORS_ORIGINS = [
-    "http://localhost:19006",
-    "http://localhost:8000",
-    "http://127.0.0.1:19006",
-    "http://127.0.0.1:8000",
-    "http://localhost:8081",
-    "http://127.0.0.1:8081",
-]
-API_HOST = os.getenv("API_HOST", "127.0.0.1")
-API_PORT = int(os.getenv("API_PORT", "8000"))
+DEFAULT_CORS_ORIGINS = ["*"]
+API_HOST = os.getenv("API_HOST", "0.0.0.0")
+API_PORT = int(os.getenv("API_PORT", "7860"))
 
 
 def get_cors_origins() -> List[str]:
@@ -60,6 +53,7 @@ TEAM_ALIASES = {
     "Man Red": "Manchester Red",
 }
 JOURNEE_DEPART_PREDICTION = 2
+PRISMA_AMELIORE_MIN_JOURNEE = 4  # Données minimales requises pour PRISMA amélioré (classement + forme)
 MAX_PREDICTIONS_PAR_JOURNEE = 3
 PRISMA_POINTS_VICTOIRE = 5
 PRISMA_POINTS_DEFAITE = -8
@@ -69,11 +63,11 @@ VERBOSE_MODE = False
 USE_INTELLIGENCE_AMELIOREE = True
 USE_SELECTION_AMELIOREE = True
 ACTIVATE_MULTIPLE_BETS = True
-MAX_COMBINED_MATCHES = 3
+MAX_COMBINED_MATCHES = 5
 PERCENTAGE_BANKROLL_MULTIPLE = 0.05
 MONTANT_FIXE_MULTIPLE = 1000
 USE_MONTANT_FIXE = True
-BANKROLL_STOP_LOSS = 5000  # Ar — seuil de sécurité : tout pari est suspendu en dessous
+BANKROLL_STOP_LOSS = 2000  # Ar — seuil de sécurité : tout pari est suspendu en dessous (40% du capital -> révisé à 2000 Ar)
 
 # --- XGBoost / PRISMA v2 ---
 PRISMA_XGBOOST_ENABLED = True   # Active le moteur hybride XGBoost + PRISMA classique
@@ -115,10 +109,40 @@ TEAM_LOGOS = {
     "West Ham": "https://i.ibb.co/c0ndsF5/West-Ham.png",
 }
 
-# --- Intégration IA Google Gemini ---
+# --- Risk Engine - Contrôle Centralisé ---
+MAX_PARIS_SIMULTANÉS_GLOBAL = 5
+MAX_PARIS_ZEUS = 3
+MAX_PARIS_PRISMA = 2
+BET_COOLDOWN_SECONDS = 2  # 2 secondes entre chaque pari (évite les rejets lors de rafales)
+MAX_COMBINED_ODDS = 5.0
+STOP_LOSS_GLOBAL = 0.40  # 40% du capital initial
+STOP_DAILY_LOSS = 10000  # 10000 Ar - limite de perte par cycle de 12 journées (plus adapté au virtuel et tests)
+
+# --- PRISMA SAFE MODE ---
+PRISMA_MIN_CONFIDENCE = 0.75  # Seuil minimum de confiance
+PRISMA_SAFE_MODE_CONFIDENCE = 0.80  # Seuil élevé en mode SAFE
+PRISMA_SAFE_MODE_REDUCTION = 0.50  # Réduction mise de 50% en mode SAFE
+PRISMA_CONSECUTIVE_LOSSES_SAFE = 3  # Nombre de pertes consécutives pour activer SAFE mode
+
+# --- ZEUS CONTRÔLE ---
+ZEUS_MIN_SCORE = 0.6  # Score minimum avant validation
+
+# --- Intégration IA OpenRouter (Principal) ---
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "qwen/qwen-2.5-72b-instruct:free")
+
+# --- Intégration IA Google Gemini (Fallback 1) ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 
-# --- Intégration IA Groq (Fallback) ---
+# --- Intégration IA Groq (Fallback 3) ---
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+
+# --- Intégration IA Ollama (Prioritaire si activé) ---
+OLLAMA_ENABLED = os.getenv("OLLAMA_ENABLED", "True").lower() == "true"
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://185.77.96.180:3000")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY", "")
+
+
