@@ -1,0 +1,113 @@
+name: Train PRISMA Models
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # Tous les jours à 2h UTC
+  workflow_dispatch:      # Manuel aussi
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: ./Backend
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+          fetch-depth: 0
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: Backend/requirements.txt
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Verify database connection
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python -c "
+          import psycopg2
+          import os
+          url = os.environ['DATABASE_URL']
+          conn = psycopg2.connect(url)
+          cur = conn.cursor()
+          cur.execute('SELECT version();')
+          print(f'✅ Connected to: {cur.fetchone()[0]}')
+          cur.close()
+          conn.close()
+          "
+      
+      - name: Train PRISMA models
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PYTHONPATH: ${{ github.workspace }}/Backend/src
+        run: |
+          echo "🏋️ Starting PRISMA training..."
+          echo "PYTHONPATH=$PYTHONPATH"
+          python scripts/local_training.py --force --no-monitor
+      
+      - name: Verify models created
+        run: |
+          echo "🔍 Verifying trained models..."
+          ls -lh models/prisma/
+          test -f models/prisma/xgboost_model.json || exit 1
+          test -f models/prisma/catboost_model.cbm || exit 1
+          echo "✅ All models found"
+      
+      - name: Upload models as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: prisma-models-${{ github.run_id }}
+          path: models/prisma/*
+          retention-days: 30
+      
+      - name: Configure git for HF
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_SPACE_ID: ${{ secrets.HF_SPACE_ID }}
+        run: |
+          git config --global user.email "actions@github.com"
+          git config --global user.name "GitHub Actions"
+          git remote add hf https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE_ID} || true
+          git lfs track "models/**/*.json"
+          git lfs track "models/**/*.cbm"
+      
+      - name: Push models to Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_SPACE_ID: ${{ secrets.HF_SPACE_ID }}
+          PYTHONPATH: ${{ github.workspace }}/Backend/src
+        run: |
+          echo "📤 Uploading to Hugging Face..."
+          python scripts/upload_to_hf_ci.py
+      
+      - name: Trigger HF Space rebuild
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_SPACE_ID: ${{ secrets.HF_SPACE_ID }}
+        run: |
+          echo "🔄 Triggering HF Space rebuild..."
+          curl -X POST \
+            "https://huggingface.co/api/spaces/${HF_SPACE_ID}/restart" \
+            -H "Authorization: Bearer ${HF_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -f || echo "⚠️ Rebuild trigger failed (non-critical)"
+      
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Training Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Date**: $(date -u +%Y-%m-%d_%H:%M:%S)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Run ID**: ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
