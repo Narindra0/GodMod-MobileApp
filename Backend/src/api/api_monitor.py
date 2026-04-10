@@ -13,7 +13,7 @@ from src.api.api_client import get_ranking, get_recent_results, get_upcoming_mat
 from src.api.db_integration import insert_api_matches, insert_api_ranking, insert_api_results
 from src.api.matches_filter import extract_matches_with_local_ids
 from src.api.results_filter import extract_results_minimal
-from src.core.console import (
+from src.core.utils.console import (
     console,
     create_panel,
     create_table,
@@ -24,8 +24,8 @@ from src.core.console import (
     print_verbose,
     print_warning,
 )
-from src.core.database import get_db_connection
-from src.core.session_manager import get_active_session, update_session_day
+from src.core.db.database import get_db_connection
+from src.core.system.session_manager import get_active_session, update_session_day
 from src.zeus.training.self_improvement import trigger_zeus_improvement
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ def launch_background_transition_tasks(old_session_id: int, new_session_id: int 
     
     def _run_prisma_pipeline():
         """Exécute le pipeline complet PRISMA (train + validate + feedback)."""
-        from src.core.database import get_db_connection
+        from src.core.db.database import get_db_connection
         
         console.print("[yellow]🔄 PRISMA: Pipeline Intelligence++ en arrière-plan lancé...[/yellow]")
         status_manager.update_global(is_training=True, description="Transition session - Pipeline complet")

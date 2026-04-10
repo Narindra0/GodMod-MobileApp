@@ -5,7 +5,7 @@ from pathlib import Path
 
 try:
     # Exécution attendue depuis le dossier Backend/
-    from src.core import config
+    from src.core.system import config
 
     DB_PATH = config.DB_NAME
 except Exception:

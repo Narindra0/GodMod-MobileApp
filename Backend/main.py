@@ -21,8 +21,9 @@ from dotenv import load_dotenv
 from src.analysis import ai_booster, intelligence
 from src.api.api_monitor import start_monitoring
 from src.api.server import start_api_server
-from src.core import config, database
-from src.core.console import (
+from src.core.system import config
+from src.core.db import database
+from src.core.utils.console import (
     Panel,
     Text,
     console,
@@ -38,7 +39,7 @@ from src.core.console import (
     set_verbose_mode,
 )
 
-from src.core.logging_setup import setup_app_logging
+from src.core.system.logging_setup import setup_app_logging
 setup_app_logging()
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ def callback_predictions_ia(journee: int):
         print_step("Mise à jour matrice de force relative")
         try:
             from src.prisma.team_strength_matrix import update_strength_matrix
-            from src.core.session_manager import get_active_session
+            from src.core.system.session_manager import get_active_session
             with database.get_db_connection(write=True) as conn:
                 session = get_active_session(conn)
                 if session:
@@ -119,8 +120,8 @@ def callback_predictions_ia(journee: int):
 
         # Récupération immédiate des soldes réels pour affichage et diagnostic
         with database.get_db_connection() as conn:
-            from src.core.zeus_finance import get_zeus_bankroll
-            from src.core.prisma_finance import get_prisma_bankroll
+            from src.core.finance.zeus_finance import get_zeus_bankroll
+            from src.core.finance.prisma_finance import get_prisma_bankroll
             
             br_zeus = get_zeus_bankroll(conn=conn)
             br_prisma = get_prisma_bankroll()
@@ -200,7 +201,7 @@ def callback_predictions_ia(journee: int):
         else:
             print_warning(f"Aucune analyse ZEUS disponible pour J{journee_prediction}")
 
-        from src.core.prisma_finance import is_prisma_stop_loss_active
+        from src.core.finance.prisma_finance import is_prisma_stop_loss_active
 
         # Détecter quel agent a déclenché le stop-loss pour un message plus précis
         prisma_sl = is_prisma_stop_loss_active()

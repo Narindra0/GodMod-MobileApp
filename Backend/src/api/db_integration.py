@@ -5,9 +5,9 @@ from typing import Dict, List, Tuple
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-from src.core import config
-from src.core.database import get_db_connection
-from src.core.session_manager import get_active_session, update_session_day
+from src.core.system import config
+from src.core.db.database import get_db_connection
+from src.core.system.session_manager import get_active_session, update_session_day
 
 logger = logging.getLogger(__name__)
 

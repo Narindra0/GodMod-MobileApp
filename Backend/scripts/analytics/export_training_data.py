@@ -31,7 +31,7 @@ def main():
 
     try:
         import pandas as pd
-        from src.core.database import get_db_connection
+        from src.core.db.database import get_db_connection
     except ImportError as e:
         logger.error(f"Dépendance manquante : {e}")
         logger.error("Installez : pip install pandas psycopg2-binary")

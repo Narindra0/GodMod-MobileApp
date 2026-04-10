@@ -2,7 +2,7 @@ import datetime
 import os
 
 import psycopg2
-from src.core.database import PG_DATABASE, PG_HOST, get_db_connection
+from src.core.db.database import PG_DATABASE, PG_HOST, get_db_connection
 
 
 def get_db_schem_info():

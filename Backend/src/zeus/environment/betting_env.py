@@ -14,8 +14,8 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-from ...core import config
-from ...core.database import get_db_connection
+from ...core.system import config
+from ...core.db.database import get_db_connection
 from ..utils.rng_bias import BiasStats, DEFAULT_BIAS, calculer_biais_rng
 from ..utils.risk_manager import RiskManager
 from .observation import ObservationContext, construire_observation

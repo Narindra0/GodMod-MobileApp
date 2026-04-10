@@ -4,19 +4,19 @@ import importlib
 import sys
 import functools
 import threading
-from ..core import config
-from ..core.database import get_db_connection
-from ..core.session_manager import get_active_session
+from ..core.system import config
+from ..core.db.database import get_db_connection
+from ..core.system.session_manager import get_active_session
 from ..prisma import engine as prisma_engine
-from ..prisma import selection as prisma_selection
+from ..prisma.utils import selection as prisma_selection
 from ..zeus.models.inference import get_zeus_model, predire_pari_zeus, formater_decision_zeus
 from ..zeus.database.queries import get_matches_for_journee, enregistrer_pari, valider_paris_zeus, PariRecord
 from . import multiple_bets
-from ..core.console import console, print_verbose
-from ..core.zeus_finance import get_zeus_bankroll, update_zeus_bankroll
-from ..core.prisma_finance import get_prisma_bankroll, is_prisma_stop_loss_active
-from ..core.risk_engine import get_risk_engine, BetRequest, ValidationStatus
-from ..core.utils import safe_json_dumps
+from ..core.utils.console import console, print_verbose
+from ..core.finance.zeus_finance import get_zeus_bankroll, update_zeus_bankroll
+from ..core.finance.prisma_finance import get_prisma_bankroll, is_prisma_stop_loss_active
+from ..core.finance.risk_engine import get_risk_engine, BetRequest, ValidationStatus
+from ..core.utils.utils import safe_json_dumps
 
 
 def _get_prediction_odds_key(prediction: str) -> str:
@@ -331,7 +331,7 @@ def _selectionner_meilleurs_matchs_ameliore_internal(conn, session_id, journee):
                 })
     final_selection = prisma_selection.filtrer_meilleurs_matchs(raw_predictions, config.MAX_PREDICTIONS_PAR_JOURNEE)
     
-    from src.core.prisma_finance import deduct_prisma_funds, get_prisma_bankroll
+    from src.core.finance.prisma_finance import deduct_prisma_funds, get_prisma_bankroll
 
     # Phase 2 : Enregistrement des prédictions DB
     for p in final_selection:
@@ -382,7 +382,7 @@ def _selectionner_meilleurs_matchs_ameliore_internal(conn, session_id, journee):
             # Place Simple Bet for PRISMA
             # On utilise Kelly si activé et qu'on a des probabilités ML dispo
             if getattr(config, 'PRISMA_KELLY_ENABLED', False) and p.get('meta'):
-                from ..prisma import kelly
+                from ..prisma.strategy import kelly
                 bankroll = get_prisma_bankroll()
                 # On privilégie la probabilité calibrée du modèle ML si présente
                 prob_ml = p['meta'].get('confidence')
@@ -450,7 +450,7 @@ def analyser_buts_recents_internal(cursor, session_id, equipe_id):
 @functools.lru_cache(maxsize=128)
 def analyser_confrontations_directes_cached(session_id, equipe_dom_id, equipe_ext_id):
     try:
-        from ..prisma.analyzers import analyser_confrontations_directes_prisma
+        from ..prisma.audit.analyzers import analyser_confrontations_directes_prisma
         with get_db_connection() as conn:
             with conn.cursor() as cursor:
                 return analyser_confrontations_directes_prisma(cursor, session_id, equipe_dom_id, equipe_ext_id)
@@ -465,7 +465,7 @@ def analyser_confrontations_directes(equipe_dom_id, equipe_ext_id, conn=None):
     
     session_id = active_session['id']
     if conn:
-        from ..prisma.analyzers import analyser_confrontations_directes_prisma
+        from ..prisma.audit.analyzers import analyser_confrontations_directes_prisma
         with conn.cursor() as cursor:
             return analyser_confrontations_directes_prisma(cursor, session_id, equipe_dom_id, equipe_ext_id)
     return analyser_confrontations_directes_cached(session_id, equipe_dom_id, equipe_ext_id)
@@ -651,7 +651,7 @@ def check_training_needs():
     (transition de session gérée par api_monitor.py).
     """
     try:
-        from prisma import xgboost_model
+        from prisma.models import xgboost_model
         from datetime import datetime, timedelta
         
         with get_db_connection() as conn:

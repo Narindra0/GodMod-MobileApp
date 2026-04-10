@@ -9,7 +9,7 @@ from urllib.parse import quote_plus
 # Ajouter le PYTHONPATH
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.core.config import BASE_DIR
+from src.core.system.config import BASE_DIR
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)

@@ -7,8 +7,8 @@ from typing import Any, Optional
 BACKEND_DIR = Path(__file__).resolve().parents[3]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
-from core import config
-from core.database import get_db_connection
+from src.core.system import config
+from src.core.db.database import get_db_connection
 from src.zeus.environment.betting_env import BettingEnv
 from src.zeus.models.ppo_agent import load_ppo_agent
 from src.zeus.utils.metrics import PerformanceInput, afficher_rapport, generer_rapport_performance

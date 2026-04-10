@@ -1,7 +1,7 @@
 import os
 import sys
 
-from src.core.database import get_db_connection
+from src.core.db.database import get_db_connection
 
 
 def migrate():

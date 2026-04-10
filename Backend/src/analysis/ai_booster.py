@@ -7,42 +7,56 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 import time
-from ..core import config
-from ..core.utils import safe_json_dumps
+from ..core.system import config
+from ..core.utils.utils import safe_json_dumps
 
 logger = logging.getLogger(__name__)
 
 # Suivi des IAs désactivées automatiquement
 DISABLED_IAS = set()
 
-_SYSTEM_PROMPT_AUDIT = """Tu es un auditeur de performance pour un système de paris automatisé sur football virtuel.
-Le système utilise deux Intelligences (Stratégies) distinctes simultanément :
-1. PRISMA : Stratégie quantitative visant des cotes de valeur avec un taux de réussite cible de 60%+.
-2. ZEUS : Stratégie autonome (Agent de pari) qui sert de filet de sécurité avec gestion agressive du capital (Martingale/Kelly).
+_SYSTEM_PROMPT_AUDIT = """Tu es un auditeur de performance spécialisé dans les systèmes de paris automatisés sur football virtuel.
 
-Contexte :
-- Les matchs sont simulés algorithmiquement.
-- Un taux < 50% pour PRISMA sur 10J indique une faille. Pour ZEUS, un taux plus bas peut être rentable selon son money management systématique.
+## Contexte du système
+Le système utilise deux stratégies simultanées et indépendantes :
+- **PRISMA** : Stratégie quantitative, cibles de cotes à valeur, taux de réussite attendu ≥ 60%
+- **ZEUS** : Agent autonome avec money management (mise fixe combinée: 1000 Ar, stop-loss à 2000 Ar). Un win rate < 50% peut rester rentable si le money management est solide.
 
-Ta mission :
-Utilise ton raisonnement profond pour analyser les paris fournis et sépare strictement tes conclusions entre PRISMA et ZEUS. IDENTIFIE les forces et faiblesses réelles.
-A la fin de ton analyse, retourne UNIQUEMENT ce JSON valide, respectant scrupuleusement la structure ci-dessous :
+## Format des données d'entrée
+Les paris te sont fournis sous format texte structuré, une ligne par pari, avec :
+- Journée, équipes, prédiction, fiabilité, cote, résultat, profit net, stratégie
+
+## Ta mission
+1. Sépare strictement les paris PRISMA et ZEUS
+2. Identifie les patterns de performance sur la période (séries, dérives, corrélations de cotes)
+3. Évalue la santé du money management de ZEUS (drawdown, rebonds, exposition maximale)
+4. Formule des recommandations actionnables et spécifiques
+
+## Instructions de réponse
+- Raisonne d'abord en 3-5 phrases avant de produire le JSON
+- Retourne ensuite UNIQUEMENT le JSON valide ci-dessous, sans balises markdown
+
 {
   "prisma_audit": {
-    "summary": "<Résumé spécifique à PRISMA: X/10 gagnés, ROI, tendance>",
-    "win_rate": <float, ex: 0.65>,
-    "strengths": ["point fort PRISMA", ...],
-    "weaknesses": ["point faible PRISMA", ...],
-    "detailed_analysis": "<Analyse des patterns PRISMA, valeur des cotes, corrélation>",
-    "recommendations": ["actionable advice PRISMA"]
+    "summary": "<X/N gagnés, win rate, ROI, tendance sur la période>",
+    "win_rate": <float>,
+    "roi": <float>,
+    "max_losing_streak": <int>,
+    "strengths": ["..."],
+    "weaknesses": ["..."],
+    "detailed_analysis": "<patterns de cotes, valeur détectée, dérives>",
+    "recommendations": ["conseil actionnable 1", "..."]
   },
   "zeus_audit": {
-    "summary": "<Résumé spécifique à ZEUS: efficacité de la gestion de mise, rebonds>",
-    "win_rate": <float, ex: 0.45>,
-    "strengths": ["point fort ZEUS", ...],
-    "weaknesses": ["point faible ZEUS", ...],
-    "detailed_analysis": "<Analyse factuelle des cycles ZEUS et de l'absorption des pertes>",
-    "recommendations": ["actionable advice ZEUS"]
+    "summary": "<efficacité Martingale, cycles de rebond, exposition max>",
+    "win_rate": <float>,
+    "roi": <float>,
+    "max_drawdown": <float>,
+    "max_stake_reached": <float>,
+    "strengths": ["..."],
+    "weaknesses": ["..."],
+    "detailed_analysis": "<cycles de perte/rebond, risque de ruin, cohérence Kelly>",
+    "recommendations": ["conseil actionnable 1", "..."]
   }
 }
 """
@@ -50,7 +64,7 @@ A la fin de ton analyse, retourne UNIQUEMENT ce JSON valide, respectant scrupule
 def perform_cycle_audit_async(journee: int, session_id: int, start_j: int = None, end_j: int = None):
     """Lance l'audit rétrospectif d'une période en arrière-plan."""
     import threading
-    from ..core.database import get_db_connection
+    from ..core.db.database import get_db_connection
     
     def _run_audit():
         try:

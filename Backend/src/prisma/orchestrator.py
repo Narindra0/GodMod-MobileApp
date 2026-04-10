@@ -13,8 +13,9 @@ from typing import Dict, List, Optional, Any
 if __name__ == '__main__':
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from core.database import get_db_connection
-from core.session_manager import get_active_session
+from src.core.db.database import get_db_connection
+from src.core.system.session_manager import get_active_session
+from prisma.training.training_status import status_manager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,6 +63,9 @@ class PrismaIntelligenceOrchestrator:
         
         start_time = datetime.now()
         
+        # Initialiser le status global
+        status_manager.update_global(is_training=True, description="Démarrage du pipeline PRISMA...")
+        
         # Étape 1: Audit
         if 'audit' in steps:
             self._run_audit()
@@ -85,6 +89,9 @@ class PrismaIntelligenceOrchestrator:
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
         
+        # Finaliser le status global
+        status_manager.update_global(is_training=False, description="Pipeline PRISMA terminé")
+        
         logger.info("=" * 80)
         logger.info(f"✅ PIPELINE TERMINÉ en {duration:.1f}s")
         logger.info("=" * 80)
@@ -97,7 +104,7 @@ class PrismaIntelligenceOrchestrator:
         logger.info("-" * 40)
         
         try:
-            from prisma.generator_audit import run_audit_report
+            from prisma.audit.generator_audit import run_audit_report
             report = run_audit_report(self.conn, 'audit_results.json')
             self.results[ 'audit' ] = { 'status': 'success' if report else 'failed' }
             logger.info("✅ Audit terminé")
@@ -129,7 +136,7 @@ class PrismaIntelligenceOrchestrator:
         logger.info("-" * 40)
         
         try:
-            from prisma.validation_framework import run_validation_suite
+            from prisma.training.validation_framework import run_validation_suite
             # Back-test sur les 2 dernières sessions
             val_results = run_validation_suite(self.conn, sessions_count=2)
             self.results[ 'validation' ] = { 'status': 'success' if val_results else 'failed' }
@@ -144,7 +151,7 @@ class PrismaIntelligenceOrchestrator:
         logger.info("-" * 40)
         
         try:
-            from prisma.feedback_loop import run_feedback_analysis
+            from prisma.strategy.feedback_loop import run_feedback_analysis
             feedback = run_feedback_analysis(self.conn, self.session_id)
             self.results[ 'feedback' ] = { 'status': 'success' if feedback else 'failed' }
             logger.info("✅ Feedback analysé")
@@ -158,7 +165,7 @@ class PrismaIntelligenceOrchestrator:
         logger.info("-" * 40)
         
         try:
-            from prisma.monitoring import run_monitoring_check
+            from prisma.utils.monitoring import run_monitoring_check
             mon_results = run_monitoring_check(self.conn, self.session_id)
             self.results[ 'monitoring' ] = { 'status': 'success' if mon_results else 'failed' }
             logger.info("✅ Monitoring effectué")

@@ -17,7 +17,7 @@ from pathlib import Path
 # Ajouter le répertoire parent au path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from src.core.database import get_db_connection, initialiser_db
+from src.core.db.database import get_db_connection, initialiser_db
 
 
 def load_json_data(filepath):

@@ -1,4 +1,4 @@
-from prisma import analyzers
+from prisma.audit import analyzers
 import logging
 
 logger = logging.getLogger(__name__)
@@ -70,8 +70,8 @@ def calculer_score_prisma_v2(data, conn=None):
     Version hybride : PRISMA classique + Ensemble ML (XGBoost + CatBoost).
     L'Ensemble est utilisé si activé par l'utilisateur dans l'interface.
     """
-    from core import config
-    from core.database import get_db_connection
+    from src.core.system import config
+    from src.core.db.database import get_db_connection
     
     # 1. Obtenir le résultat classique pour les filtres de rejet et le fallback
     classic_res, classic_score = calculer_score_prisma(data)
@@ -95,7 +95,7 @@ def calculer_score_prisma_v2(data, conn=None):
     # 2. Tentative de prédiction via Ensemble ML
     if ensemble_enabled:
         try:
-            from prisma import ensemble
+            from prisma.models import ensemble
             # Utiliser la connexion déjà importée
             with get_db_connection() as conn:
                 cursor = conn.cursor()
@@ -112,8 +112,8 @@ def calculer_score_prisma_v2(data, conn=None):
                 
                 if poisson_enabled:
                     try:
-                        from prisma import poisson
-                        from core.session_manager import get_active_session
+                        from prisma.models import poisson
+                        from src.core.system.session_manager import get_active_session
                         
                         with get_db_connection() as local_conn:
                             session = get_active_session(local_conn)

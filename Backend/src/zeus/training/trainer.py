@@ -2,8 +2,8 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
-from ...core import config
-from ...core.database import get_db_connection
+from ...core.system import config
+from ...core.db.database import get_db_connection
 from ..environment.betting_env import BettingEnv
 from ..models.ppo_agent import CallbackConfig, PPOConfig, create_callbacks, create_ppo_agent
 

@@ -1,15 +1,15 @@
 import logging
 
-from ..core import config
-from ..core.database import get_db_connection
-from ..core.prisma_finance import (
+from ..core.system import config
+from ..core.db.database import get_db_connection
+from ..core.finance.prisma_finance import (
     deduct_prisma_funds,
     get_prisma_bankroll,
     is_prisma_stop_loss_active,
     update_prisma_bankroll,
 )
-from ..core import zeus_finance
-from ..core.session_manager import get_active_session
+from ..core.finance import zeus_finance
+from ..core.system.session_manager import get_active_session
 
 logger = logging.getLogger(__name__)
 

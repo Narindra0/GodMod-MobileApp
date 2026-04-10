@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from src.core import config
+from src.core.system import config
 from .logging_middleware import SimplifiedLoggingMiddleware
 
 

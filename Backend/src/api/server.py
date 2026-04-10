@@ -2,8 +2,8 @@ import threading
 
 import uvicorn
 from fastapi import FastAPI
-from src.core import config
-from src.core.init_data import initialize_all
+from src.core.system import config
+from src.core.db.init_data import initialize_all
 
 from .middleware import apply_cors
 from .routes import register_routes

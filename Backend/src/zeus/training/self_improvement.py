@@ -4,8 +4,8 @@ import time
 
 from stable_baselines3 import PPO
 
-from ...core import config
-from ...core.database import get_db_connection
+from ...core.system import config
+from ...core.db.database import get_db_connection
 from ..database.queries import check_new_season_available, get_last_training_metadata
 from ..environment.betting_env import BettingEnv
 from ..models.comparison import deployer_modele, doit_promouvoir, evaluer_robustesse

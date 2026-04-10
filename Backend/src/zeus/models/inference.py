@@ -3,8 +3,8 @@ from typing import Any, Dict, Optional, Tuple
 
 from stable_baselines3 import PPO
 
-from ...core import config
-from ...core.zeus_finance import get_zeus_bankroll
+from ...core.system import config
+from ...core.finance.zeus_finance import get_zeus_bankroll
 from ..environment.betting_env import ACTION_SPACE_CONFIG
 from ..utils.rng_bias import calculer_biais_rng
 from ..utils.risk_manager import RiskManager

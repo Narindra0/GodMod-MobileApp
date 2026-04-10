@@ -1,8 +1,8 @@
 import os
 import sys
 
-from src.core import config
-from src.core.database import get_db_connection
+from src.core.system import config
+from src.core.db.database import get_db_connection
 
 # Add the project root to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))

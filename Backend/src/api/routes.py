@@ -3,9 +3,9 @@ import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
-from src.core import config
-from src.core.database import get_db_connection
-from src.core.session_manager import get_active_session
+from src.core.system import config
+from src.core.db.database import get_db_connection
+from src.core.system.session_manager import get_active_session
 
 from .models import AiSettingsUpdate, BorrowRequest, ForceTrainingRequest, OverrideRequest, PrismaSettingsUpdate, ResetRequest, AuditTriggerRequest
 
@@ -268,7 +268,7 @@ def parse_ai_analysis(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 def get_prisma_bankroll():
     """Read PRISMA bankroll from database via prisma_finance"""
     try:
-        from src.core.prisma_finance import get_prisma_bankroll as get_bankroll_from_core
+        from src.core.finance.prisma_finance import get_prisma_bankroll as get_bankroll_from_core
 
         return get_bankroll_from_core()
     except Exception as e:
@@ -278,7 +278,7 @@ def get_prisma_bankroll():
 def get_zeus_bankroll():
     """Read ZEUS bankroll from database via zeus_finance"""
     try:
-        from src.core.zeus_finance import get_zeus_bankroll as get_zeus_from_core
+        from src.core.finance.zeus_finance import get_zeus_bankroll as get_zeus_from_core
 
         return get_zeus_from_core()
     except Exception as e:
@@ -356,7 +356,7 @@ def register_routes(app: FastAPI) -> None:
         try:
             from src.prisma.orchestrator import PrismaIntelligenceOrchestrator
             from src.prisma.training_status import status_manager
-            from src.core.database import get_db_connection
+            from src.core.db.database import get_db_connection
             import threading
 
             # Mettre à jour le status IMMÉDIATEMENT pour que le dashboard réagisse
@@ -480,7 +480,7 @@ def register_routes(app: FastAPI) -> None:
                 )
 
                 # Mettre à jour le bankroll global ZEUS dans prisma_config
-                from src.core.zeus_finance import update_zeus_bankroll
+                from src.core.finance.zeus_finance import update_zeus_bankroll
                 update_zeus_bankroll(new_bankroll, conn=conn)
 
                 # Le context manager commit automatiquement

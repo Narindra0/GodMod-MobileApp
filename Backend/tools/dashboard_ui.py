@@ -3,7 +3,7 @@ from datetime import datetime
 
 import pandas as pd
 import streamlit as st
-from src.core import config
+from src.core.system import config
 
 st.set_page_config(
     page_title="GODMOD V2 - Intelligence Center", page_icon="⚡", layout="wide", initial_sidebar_state="expanded"
@@ -48,8 +48,8 @@ st.markdown(
 
 @st.cache_data(ttl=5)
 def load_all_data():
-    from src.core.database import get_db_connection
-    from src.core.session_manager import get_active_session
+    from src.core.db.database import get_db_connection
+    from src.core.system.session_manager import get_active_session
 
     active_session = get_active_session()
     session_id = active_session["id"]
@@ -166,7 +166,7 @@ new_intelligence_state = st.sidebar.toggle(
     help="Active simultanément le Mode Multi-Facteurs et la Phase 3 (Sélection Améliorée)",
 )
 if new_intelligence_state != current_intelligence_state:
-    from src.core import utils
+    from src.core.utils import utils
 
     if utils.update_global_intelligence_flags(new_intelligence_state):
         import importlib

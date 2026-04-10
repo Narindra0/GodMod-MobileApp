@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 import logging
 
-from src.core.session_manager import get_active_session
+from src.core.system.session_manager import get_active_session
 
 logger = logging.getLogger(__name__)
 
@@ -250,10 +250,10 @@ def valider_paris_zeus(conn: Any):
     for (sess_id, strat), p_sess in batches.items():
         # Utiliser maintenant le portefeuille GLOBAL pour chaque stratégie
         if strat == "ZEUS":
-            from src.core.zeus_finance import get_zeus_bankroll
+            from src.core.finance.zeus_finance import get_zeus_bankroll
             current_bankroll = get_zeus_bankroll(conn=conn)
         else:
-            from src.core.prisma_finance import get_prisma_bankroll
+            from src.core.finance.prisma_finance import get_prisma_bankroll
             current_bankroll = get_prisma_bankroll()
         for p in p_sess:
             is_win = False
@@ -294,7 +294,7 @@ def valider_paris_zeus(conn: Any):
             )
 
             if strat == "ZEUS":
-                from src.core.zeus_finance import update_zeus_bankroll
+                from src.core.finance.zeus_finance import update_zeus_bankroll
                 update_zeus_bankroll(current_bankroll, conn=conn)
 
                 delta_score = 1 if is_win else -1

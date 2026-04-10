@@ -9,8 +9,8 @@ import os
 # Ajouter le répertoire parent au path pour les imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.core.database import get_db_connection
-from src.core.session_manager import get_active_session
+from src.core.db.database import get_db_connection
+from src.core.system.session_manager import get_active_session
 from src.prisma.team_strength_matrix import update_strength_matrix, get_matrix_stats, load_matrix
 import logging
 

@@ -16,13 +16,16 @@ import time
 import json
 from datetime import datetime
 
-# Ajouter le répertoire parent au path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+# Ajouter le répertoire parent et src au path
+root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+src_dir = os.path.join(root_dir, 'src')
+sys.path.insert(0, root_dir)
+sys.path.insert(0, src_dir)
 
-from src.core.database import get_db_connection
-from src.core.session_manager import get_active_session
-from src.prisma.orchestrator import PrismaIntelligenceOrchestrator
-from src.prisma.training_status import status_manager
+from src.core.db.database import get_db_connection
+from src.core.system.session_manager import get_active_session
+from prisma.orchestrator import PrismaIntelligenceOrchestrator
+from prisma.training_status import status_manager
 
 
 def print_progress():
@@ -45,18 +48,31 @@ def print_progress():
     print(f"{'='*60}\n")
 
 
-def monitor_training():
-    """Surveille l'entraînement jusqu'à la fin"""
+def monitor_training(wait_start_seconds=10):
+    """Surveille l'entraînement jusqu'à la fin avec une période de grâce au démarrage"""
     print("📊 Surveillance de l'entraînement...")
     last_progress = -1
+    last_is_training = None
+    last_description = ""
+    start_time = time.time()
+    has_started = False
     
     while True:
         status = status_manager.get_status()
         
-        # Afficher si changement de progression
-        if status['progress'] != last_progress:
+        # Vérifier si l'entraînement a commencé
+        if status['is_training']:
+            has_started = True
+
+        # Afficher si changement d'état important
+        if (status['progress'] != last_progress or 
+            status['is_training'] != last_is_training or 
+            status['step_description'] != last_description):
+            
             print_progress()
             last_progress = status['progress']
+            last_is_training = status['is_training']
+            last_description = status['step_description']
         
         # Vérifier si terminé
         if not status['is_training'] and status['progress'] >= 100:
@@ -64,9 +80,15 @@ def monitor_training():
             print_progress()
             break
         
-        # Vérifier si erreur
-        if not status['is_training'] and status['progress'] == 0:
-            print("\n⚠️ L'entraînement semble avoir échoué ou ne pas avoir démarré")
+        # Vérifier si erreur (après délai de grâce)
+        if not status['is_training'] and not has_started:
+            if time.time() - start_time > wait_start_seconds:
+                print(f"\n⚠️ L'entraînement n'a pas démarré après {wait_start_seconds}s")
+                print_progress()
+                break
+        elif not status['is_training'] and has_started and status['progress'] < 100:
+            # S'il était en cours et s'est arrêté brusquement sans atteindre 100%
+            print("\n❌ L'entraînement s'est arrêté de manière inattendue")
             print_progress()
             break
         

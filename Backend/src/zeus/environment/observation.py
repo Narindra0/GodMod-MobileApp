@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 import numpy as np
-from core.session_manager import get_active_session
+from src.core.system.session_manager import get_active_session
 
 from ..utils.rng_bias import DEFAULT_BIAS, BiasStats
 
