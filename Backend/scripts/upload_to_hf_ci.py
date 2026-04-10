@@ -13,6 +13,16 @@ from datetime import datetime
 PROJECT_DIR = Path(__file__).parent.parent.absolute()
 MODELS_DIR = PROJECT_DIR / 'models' / 'prisma'
 
+# Si on est dans un sous-dossier Backend, ajuster les chemins
+if PROJECT_DIR.name == 'Backend':
+    # On est déjà au bon niveau
+    pass
+else:
+    # Chercher le dossier Backend
+    backend_dir = PROJECT_DIR / 'Backend'
+    if backend_dir.exists():
+        MODELS_DIR = backend_dir / 'models' / 'prisma'
+
 def get_required_files():
     """Retourne la liste des fichiers requis"""
     return [
