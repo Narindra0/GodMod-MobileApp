@@ -51,8 +51,10 @@ jobs:
       - name: Train PRISMA models
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PYTHONPATH: ${{ github.workspace }}/Backend/src
         run: |
           echo "🏋️ Starting PRISMA training..."
+          echo "PYTHONPATH=$PYTHONPATH"
           python scripts/local_training.py --force --no-monitor
       
       - name: Verify models created
@@ -85,6 +87,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_SPACE_ID: ${{ secrets.HF_SPACE_ID }}
+          PYTHONPATH: ${{ github.workspace }}/Backend/src
         run: |
           echo "📤 Uploading to Hugging Face..."
           python scripts/upload_to_hf_ci.py
