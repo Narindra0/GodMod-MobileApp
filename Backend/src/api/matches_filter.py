@@ -11,7 +11,8 @@ def extract_matches_with_local_ids(data: Dict, limit: int = 1) -> List[Dict]:
         for local_id, m in enumerate(r.get("matches", []), start=1):
             odds = []
             for bet_type in m.get("eventBetTypes", []):
-                if bet_type.get("name") == "1X2":
+                bet_name = bet_type.get("name", "")
+                if bet_name in ["1X2", "Double Chance"]:
                     for item in bet_type.get("eventBetTypeItems", []):
                         odds.append({"type": item.get("shortName"), "odds": item.get("odds")})
             clean_match = {

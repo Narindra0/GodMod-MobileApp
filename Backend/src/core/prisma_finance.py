@@ -5,7 +5,7 @@ from .session_manager import get_active_session
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_BANKROLL = 20000
+_DEFAULT_BANKROLL = config.DEFAULT_BANKROLL
 
 def _read_wallet() -> int:
     try:
@@ -39,9 +39,8 @@ def get_prisma_bankroll():
 def is_prisma_stop_loss_active() -> bool:
     return get_prisma_bankroll() < config.BANKROLL_STOP_LOSS
 
-def update_prisma_bankroll(session_id, nouveau_bankroll, mise, resultat, cote):
-    # On ajoute session_id pour la compatibilité avec l'appel historique, 
-    # mais on écrit dans le portefeuille global
+def update_prisma_bankroll(nouveau_bankroll, mise, resultat, cote):
+    """Met à jour le bankroll PRISMA global (non spécifique à une session)."""
     _write_wallet(nouveau_bankroll)
     logger.info(f"Bankroll PRISMA (Global) mis à jour : {nouveau_bankroll} Ar")
 
@@ -60,6 +59,5 @@ def deduct_prisma_funds(mise):
         )
         return False, current_bankroll
 
-    # On utilise 0 comme session_id fictif car le compte est global
-    update_prisma_bankroll(0, new_bankroll, mise, None, None)
+    update_prisma_bankroll(new_bankroll, mise, None, None)
     return True, new_bankroll

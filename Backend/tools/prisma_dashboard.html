@@ -51,14 +51,30 @@
         
         async function fetchStatus() {
             try {
-                const response = await fetch('/prisma/training-status');
+                // Essayer d'abord le chemin relatif, puis absolu si nécessaire
+                let response;
+                try {
+                    response = await fetch('/prisma/training-status');
+                } catch (e) {
+                    // Fallback pour HF Spaces - chemin avec le full path
+                    response = await fetch(window.location.pathname.replace(/\/prisma\/dashboard\/?$/, '') + '/prisma/training-status');
+                }
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
                 const data = await response.json();
                 updateDashboard(data);
                 detectPhase(data);
+                document.getElementById('global-status-mini').innerText = 'CONNECTÉ';
+                document.getElementById('global-status-mini').className = 'text-xs font-mono text-emerald-500';
             } catch (e) {
-                console.error('Erreur', e);
+                console.error('Erreur API:', e);
                 document.getElementById('global-status').innerText = 'NON CONNECTÉ';
                 document.getElementById('global-status').className = 'text-red-400 font-bold tracking-wider';
+                document.getElementById('global-status-mini').innerText = 'ERREUR';
+                document.getElementById('global-status-mini').className = 'text-xs font-mono text-red-500';
             }
         }
 

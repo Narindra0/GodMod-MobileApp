@@ -333,8 +333,8 @@ class RiskEngine:
                     result = cursor.fetchone()
                     if result and result['active']:
                         return confidence >= config.PRISMA_SAFE_MODE_CONFIDENCE
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"[RISK-ENGINE] Erreur lecture mode SAFE PRISMA: {e}", exc_info=True)
             return confidence >= config.PRISMA_MIN_CONFIDENCE
         else:  # ZEUS
             return confidence >= config.ZEUS_MIN_SCORE
@@ -368,7 +368,7 @@ class RiskEngine:
                 cursor.execute("""
                     SELECT resultat FROM historique_paris 
                     WHERE strategie = 'PRISMA' AND session_id = %s
-                    ORDER BY id DESC LIMIT %s
+                    ORDER BY id_pari DESC LIMIT %s
                 """, (session_id, config.PRISMA_CONSECUTIVE_LOSSES_SAFE))
                 results = cursor.fetchall()
                 
@@ -380,7 +380,6 @@ class RiskEngine:
                             INSERT INTO prisma_safe_mode (session_id, active, consecutive_losses, activated_at)
                             VALUES (%s, TRUE, %s, CURRENT_TIMESTAMP)
                         """, (session_id, losses))
-                        conn.commit()
                         logger.warning(f"[RISK-ENGINE] Mode SAFE PRISMA activé ({losses} pertes consécutives)")
                         return (True, losses)
                 
@@ -407,7 +406,6 @@ class RiskEngine:
                         END,
                         last_reset = CURRENT_DATE
                 """, (agent,))
-                conn.commit()
         except Exception as e:
             logger.error(f"[RISK-ENGINE] Erreur mise à jour cooldown: {e}")
     
@@ -418,7 +416,10 @@ class RiskEngine:
         if status == ValidationStatus.ACCEPTED:
             logger.info(f"[RISK-ENGINE] ✓ ACCEPTÉ: {message}")
         else:
-            logger.warning(f"[RISK-ENGINE] ✗ {status.value}: {reason.value if reason else 'N/A'} - {message}")
+            if reason in [RejectionReason.GLOBAL_LIMIT_REACHED, RejectionReason.AGENT_LIMIT_REACHED, RejectionReason.INSUFFICIENT_CONFIDENCE, RejectionReason.COOLDOWN_NOT_RESPECTED]:
+                logger.info(f"[RISK-ENGINE] ✗ {status.value}: {reason.value if reason else 'N/A'} - {message}")
+            else:
+                logger.warning(f"[RISK-ENGINE] ✗ {status.value}: {reason.value if reason else 'N/A'} - {message}")
         
         return BetValidationResult(
             status=status,

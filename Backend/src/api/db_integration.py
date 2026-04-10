@@ -5,9 +5,9 @@ from typing import Dict, List, Tuple
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-from core import config
-from core.database import get_db_connection
-from core.session_manager import get_active_session, update_session_day
+from src.core import config
+from src.core.database import get_db_connection
+from src.core.session_manager import get_active_session, update_session_day
 
 logger = logging.getLogger(__name__)
 
@@ -213,8 +213,11 @@ def insert_api_matches(matches_data: List[Dict], session_id: int = None) -> int:
                     cote_1 = next((o["odds"] for o in odds if o["type"] == "1"), None)
                     cote_x = next((o["odds"] for o in odds if o["type"] == "X"), None)
                     cote_2 = next((o["odds"] for o in odds if o["type"] == "2"), None)
+                    cote_1x = next((o["odds"] for o in odds if o["type"] == "1X"), None)
+                    cote_12 = next((o["odds"] for o in odds if o["type"] == "12"), None)
+                    cote_x2 = next((o["odds"] for o in odds if o["type"] in ["X2", "2X"]), None)
 
-                    insert_data.append((session_id, journee, home_id, away_id, cote_1, cote_x, cote_2))
+                    insert_data.append((session_id, journee, home_id, away_id, cote_1, cote_x, cote_2, cote_1x, cote_12, cote_x2))
                 else:
                     logger.warning(f"Equipes non trouvees: {home_team} vs {away_team}")
 
@@ -222,12 +225,15 @@ def insert_api_matches(matches_data: List[Dict], session_id: int = None) -> int:
         if insert_data:
             cursor.executemany(
                 """
-                INSERT INTO matches (session_id, journee, equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2, status)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, 'A_VENIR')
+                INSERT INTO matches (session_id, journee, equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2, cote_1x, cote_12, cote_x2, status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'A_VENIR')
                 ON CONFLICT(session_id, journee, equipe_dom_id, equipe_ext_id) DO UPDATE SET
                     cote_1 = excluded.cote_1,
                     cote_x = excluded.cote_x,
-                    cote_2 = excluded.cote_2
+                    cote_2 = excluded.cote_2,
+                    cote_1x = excluded.cote_1x,
+                    cote_12 = excluded.cote_12,
+                    cote_x2 = excluded.cote_x2
             """,
                 insert_data,
             )

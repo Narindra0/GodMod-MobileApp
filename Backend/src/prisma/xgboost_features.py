@@ -36,7 +36,10 @@ FEATURE_NAMES = [
     'prob_deviation_1', 'prob_deviation_x', 'prob_deviation_2',
     'value_score_1', 'value_score_x', 'value_score_2', 'max_value_score',
     'kelly_fraction_1', 'kelly_fraction_x', 'kelly_fraction_2',
-    'odds_range_class', 'is_balanced_market'
+    'odds_range_class', 'is_balanced_market',
+    # NOUVELLES: Double Chance (désactivées temporairement - réactivation après réentraînement)
+    # 'cote_1x', 'cote_12', 'cote_x2',
+    # 'prob_implicite_1x', 'prob_implicite_12', 'prob_implicite_x2'
 ]
 
 # Mapping des labels pour la classification multiclasse
@@ -279,7 +282,14 @@ def _extract_features_list(data: dict, conn=None) -> list:
         market_features.get('kelly_fraction_x', 0.0),
         market_features.get('kelly_fraction_2', 0.0),
         market_features.get('odds_range_class', 2.0),
-        market_features.get('is_balanced_market', 1.0)
+        market_features.get('is_balanced_market', 1.0),
+        # NOUVELLES: Double Chance (44-50) - désactivées temporairement
+        # _safe_float(data.get('cote_1x')),
+        # _safe_float(data.get('cote_12')),
+        # _safe_float(data.get('cote_x2')),
+        # market_features.get('prob_implicite_1x', 0.0),
+        # market_features.get('prob_implicite_12', 0.0),
+        # market_features.get('prob_implicite_x2', 0.0)
     ]
 
     return feat_values
@@ -327,7 +337,7 @@ def extract_training_data(conn, session_id: int = None):
         SELECT 
             m.id, m.journee, m.session_id,
             m.equipe_dom_id, m.equipe_ext_id, m.score_dom, m.score_ext,
-            m.cote_1, m.cote_x, m.cote_2,
+            m.cote_1, m.cote_x, m.cote_2, m.cote_1x, m.cote_12, m.cote_x2,
             c1.points as pts_dom, c1.forme as forme_dom, c1.buts_pour as bp_dom, c1.buts_contre as bc_dom,
             c2.points as pts_ext, c2.forme as forme_ext, c2.buts_pour as bp_ext, c2.buts_contre as bc_ext
         FROM matches m
@@ -386,6 +396,9 @@ def extract_training_data(conn, session_id: int = None):
             'cote_1': row.get('cote_1'),
             'cote_x': row.get('cote_x'),
             'cote_2': row.get('cote_2'),
+            'cote_1x': row.get('cote_1x'),
+            'cote_12': row.get('cote_12'),
+            'cote_x2': row.get('cote_x2'),
             'bonus_h2h': analyzers.analyser_confrontations_directes_prisma(
                 cursor, row['session_id'], row['equipe_dom_id'], row['equipe_ext_id']
             ),

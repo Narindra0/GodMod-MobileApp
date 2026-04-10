@@ -90,6 +90,27 @@ class MarketFeatureExtractor:
         features['kelly_fraction_x'] = self._calculate_kelly_fraction(prob_x, cote_x)
         features['kelly_fraction_2'] = self._calculate_kelly_fraction(prob_2, cote_2)
         
+        # 11. Double Chance probabilities (Si disponibles dans match_data)
+        cote_1x = match_data.get('cote_1x')
+        cote_12 = match_data.get('cote_12')
+        cote_x2 = match_data.get('cote_x2')
+        
+        if cote_1x:
+            features['prob_implicite_1x'] = 1.0 / cote_1x
+        else:
+            # Fallback direct: P(1X) = P(1) + P(X)
+            features['prob_implicite_1x'] = prob_1 + prob_x
+            
+        if cote_12:
+            features['prob_implicite_12'] = 1.0 / cote_12
+        else:
+            features['prob_implicite_12'] = prob_1 + prob_2
+            
+        if cote_x2:
+            features['prob_implicite_x2'] = 1.0 / cote_x2
+        else:
+            features['prob_implicite_x2'] = prob_x + prob_2
+            
         return features
     
     def _calculate_implied_probabilities(self, cote_1: float, cote_x: float, cote_2: float) -> Tuple[float, float, float, float]:

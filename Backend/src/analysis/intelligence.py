@@ -18,6 +18,63 @@ from ..core.prisma_finance import get_prisma_bankroll, is_prisma_stop_loss_activ
 from ..core.risk_engine import get_risk_engine, BetRequest, ValidationStatus
 from ..core.utils import safe_json_dumps
 
+
+def _get_prediction_odds_key(prediction: str) -> str:
+    prediction = (prediction or "").upper()
+    if prediction in ["X", "N"]:
+        return "cote_x"
+    if prediction == "1X":
+        return "cote_1x"
+    if prediction == "12":
+        return "cote_12"
+    if prediction == "X2":
+        return "cote_x2"
+    return f"cote_{prediction.lower()}"
+
+
+def _resolve_market_odds(match_data: dict, prediction: str):
+    return match_data.get(_get_prediction_odds_key(prediction))
+
+
+def _prediction_matches_result(prediction: str, resultat_reel: str) -> bool:
+    prediction = (prediction or "").upper()
+    resultat_reel = (resultat_reel or "").upper()
+    if prediction == "1X":
+        return resultat_reel in {"1", "X"}
+    if prediction == "12":
+        return resultat_reel in {"1", "2"}
+    if prediction == "X2":
+        return resultat_reel in {"X", "2"}
+    return prediction == resultat_reel
+
+
+def _optimize_prediction_for_double_chance(prediction_data: dict, min_probability: float = 0.82) -> str:
+    meta = prediction_data.get("meta", {})
+    probs = meta.get("probabilities", {})
+    if not probs:
+        return prediction_data["prediction"]
+
+    p1 = probs.get("1", 0)
+    px = probs.get("X", 0)
+    p2 = probs.get("2", 0)
+
+    dc_candidates = [
+        ("1X", p1 + px),
+        ("12", p1 + p2),
+        ("X2", px + p2),
+    ]
+    best_market, best_probability = max(dc_candidates, key=lambda item: item[1])
+    cote_dc = _resolve_market_odds(prediction_data, best_market)
+
+    if cote_dc and best_probability > min_probability and float(cote_dc) > 1.05:
+        print_verbose(
+            f"   [PRISMA DC] {prediction_data['equipe_dom']} vs {prediction_data['equipe_ext']} -> "
+            f"{best_market} (Confiance DC: {best_probability:.2f})"
+        )
+        return best_market
+
+    return prediction_data["prediction"]
+
 logger = logging.getLogger(__name__)
 
 # Variables globales pour la gestion de l'entraînement asynchrone
@@ -40,12 +97,14 @@ def _reload_config():
         importlib.reload(sys.modules['src.core.config'])
         globals()['config'] = sys.modules['src.core.config']
 
-def calculer_probabilite_avec_fallback(equipe_dom_id, equipe_ext_id, cote_1=None, cote_x=None, cote_2=None):
+def calculer_probabilite_avec_fallback(equipe_dom_id, equipe_ext_id, cote_1=None, cote_x=None, cote_2=None, cote_1x=None, cote_12=None, cote_x2=None, conn=None):
     if cote_1 is not None and cote_x is not None and cote_2 is not None:
-        return calculer_probabilite_amelioree(equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2)
+        return calculer_probabilite_amelioree(equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2, cote_1x, cote_12, cote_x2, conn=conn)
     else:
         logger.warning(f"Cotes manquantes pour match {equipe_dom_id} vs {equipe_ext_id}. Utilisation du calcul simple.")
-        return calculer_probabilite(equipe_dom_id, equipe_ext_id)
+        return calculer_probabilite(equipe_dom_id, equipe_ext_id, conn=conn)
+
+
 
 def calculer_probabilite(equipe_dom_id, equipe_ext_id, conn=None):
     if conn:
@@ -86,7 +145,7 @@ def _calculer_probabilite_internal(conn, session_id, equipe_dom_id, equipe_ext_i
     else:
         return "X", abs(score_total)
 
-def calculer_probabilite_amelioree(equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2, conn=None):
+def calculer_probabilite_amelioree(equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2, cote_1x=None, cote_12=None, cote_x2=None, conn=None):
     if conn:
         active_session = get_active_session(conn=conn)
     else:
@@ -94,15 +153,15 @@ def calculer_probabilite_amelioree(equipe_dom_id, equipe_ext_id, cote_1, cote_x,
     
     session_id = active_session['id']
     if conn:
-        return _calculer_probabilite_amelioree_internal(conn, session_id, equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2)
+        return _calculer_probabilite_amelioree_internal(conn, session_id, equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2, cote_1x, cote_12, cote_x2)
     try:
         with get_db_connection() as conn:
-            return _calculer_probabilite_amelioree_internal(conn, session_id, equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2)
+            return _calculer_probabilite_amelioree_internal(conn, session_id, equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2, cote_1x, cote_12, cote_x2)
     except Exception as e:
         logger.error(f"Erreur lors du calcul PRISMA : {e}", exc_info=True)
         return None, 0, {}
 
-def _calculer_probabilite_amelioree_internal(conn, session_id, equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2):
+def _calculer_probabilite_amelioree_internal(conn, session_id, equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2, cote_1x=None, cote_12=None, cote_x2=None):
     cursor = conn.cursor()
     cursor.execute("SELECT points, forme FROM classement WHERE session_id = %s AND equipe_id = %s ORDER BY journee DESC LIMIT 1", (session_id, equipe_dom_id,))
     stats_dom = cursor.fetchone()
@@ -121,6 +180,7 @@ def _calculer_probabilite_amelioree_internal(conn, session_id, equipe_dom_id, eq
         'pts_dom': pts_dom, 'pts_ext': pts_ext,
         'forme_dom': forme_dom, 'forme_ext': forme_ext,
         'cote_1': cote_1, 'cote_x': cote_x, 'cote_2': cote_2,
+        'cote_1x': cote_1x, 'cote_12': cote_12, 'cote_x2': cote_x2,
         'bonus_h2h': bonus_h2h
     }
     if buts_dom and buts_ext:
@@ -132,7 +192,7 @@ def _calculer_probabilite_amelioree_internal(conn, session_id, equipe_dom_id, eq
     if prediction is None:
         return None, 0, {}
     # Injecter les cotes dans metadata pour faciliter Kelly plus tard
-    metadata.update({'cote_1': cote_1, 'cote_x': cote_x, 'cote_2': cote_2})
+    metadata.update({'cote_1': cote_1, 'cote_x': cote_x, 'cote_2': cote_2, 'cote_1x': cote_1x, 'cote_12': cote_12, 'cote_x2': cote_x2})
     return prediction, score, metadata
 
 def analyser_performances_recentes(conn=None):
@@ -218,14 +278,14 @@ def _selectionner_meilleurs_matchs_ameliore_internal(conn, session_id, journee):
     taux_succes, _ = analyser_performances_recentes(conn=conn)
     seuil_confiance, mode_descr = prisma_selection.determiner_seuil_dynamique(taux_succes)
     print_verbose(f"   [PRISMA] Mode {mode_descr} | Seuil: {seuil_confiance}")
-    cursor.execute("SELECT id, equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2 FROM matches WHERE session_id = %s AND journee = %s", (session_id, journee))
+    cursor.execute("SELECT id, equipe_dom_id, equipe_ext_id, cote_1, cote_x, cote_2, cote_1x, cote_12, cote_x2 FROM matches WHERE session_id = %s AND journee = %s", (session_id, journee))
     matchs = cursor.fetchall()
     cursor.execute("SELECT id, nom FROM equipes")
     equipes_noms = {r['id']: r['nom'] for r in cursor.fetchall()}
     raw_predictions = []
     for m in matchs:
-        match_id, dom_id, ext_id, c1, cx, c2 = m['id'], m['equipe_dom_id'], m['equipe_ext_id'], m['cote_1'], m['cote_x'], m['cote_2']
-        pred, conf, meta = calculer_probabilite_amelioree(dom_id, ext_id, c1, cx, c2, conn=conn)
+        match_id, dom_id, ext_id, c1, cx, c2, c1x, c12, cx2 = m['id'], m['equipe_dom_id'], m['equipe_ext_id'], m['cote_1'], m['cote_x'], m['cote_2'], m['cote_1x'], m['cote_12'], m['cote_x2']
+        pred, conf, meta = calculer_probabilite_amelioree(dom_id, ext_id, c1, cx, c2, c1x, c12, cx2, conn=conn)
         
         if pred == 'NO_BET':
             reason = meta.get('reason', 'Silence Intelligent')
@@ -266,11 +326,12 @@ def _selectionner_meilleurs_matchs_ameliore_internal(conn, session_id, journee):
                     'prediction': pred, 'confiance': conf_final, 'fiabilite': conf_final,
                     'ai_analysis': None, 'score_base': float(conf),
                     'cote_1': c1, 'cote_x': cx, 'cote_2': c2,
+                    'cote_1x': c1x, 'cote_12': c12, 'cote_x2': cx2,
                     'meta': meta
                 })
     final_selection = prisma_selection.filtrer_meilleurs_matchs(raw_predictions, config.MAX_PREDICTIONS_PAR_JOURNEE)
     
-    from core.prisma_finance import deduct_prisma_funds, get_prisma_bankroll
+    from src.core.prisma_finance import deduct_prisma_funds, get_prisma_bankroll
 
     # Phase 2 : Enregistrement des prédictions DB
     for p in final_selection:
@@ -293,20 +354,27 @@ def _selectionner_meilleurs_matchs_ameliore_internal(conn, session_id, journee):
     # Phase 3 : Pari Multiple (Combiné) prioritaire — nécessite min 2 matchs validés
     multiple_result = None
     selections_combinable = []
+    
+    import copy
+    
     for p in final_selection:
-        cote_key = "cote_x" if p["prediction"].upper() in ["N", "X"] else f"cote_{p['prediction'].lower()}"
-        cote_val = p.get(cote_key)
+        p_comb = copy.deepcopy(p)
+        
+        p_comb['prediction'] = _optimize_prediction_for_double_chance(p_comb)
+        cote_val = _resolve_market_odds(p_comb, p_comb['prediction'])
+        
         if cote_val and float(cote_val) <= getattr(config, 'MAX_COMBINED_ODDS', 5.0):
-            selections_combinable.append(p)
+            selections_combinable.append(p_comb)
+            
     if len(selections_combinable) >= 2:
         multiple_result = multiple_bets.generer_pari_multiple(journee, selections_combinable, conn=conn)
 
     # Phase 4 : Paris Simples (SEULEMENT si le pari multiple n'a pas été placé)
     if not multiple_result:
         for p in final_selection:
+            p['prediction'] = _optimize_prediction_for_double_chance(p)
             # Filtrer les cotes trop élevées pour les paris simples aussi
-            cote_key_p = "cote_x" if p["prediction"].upper() in ["N", "X"] else f"cote_{p['prediction'].lower()}"
-            cote_val_p = p.get(cote_key_p)
+            cote_val_p = _resolve_market_odds(p, p['prediction'])
             if cote_val_p and float(cote_val_p) > getattr(config, 'MAX_COMBINED_ODDS', 5.0):
                 logger.info(f"[PRISMA] Pari simple rejeté pour {p.get('equipe_dom')} vs {p.get('equipe_ext')} : cote {float(cote_val_p):.2f} > plafond {config.MAX_COMBINED_ODDS}")
                 continue
@@ -320,8 +388,7 @@ def _selectionner_meilleurs_matchs_ameliore_internal(conn, session_id, journee):
                 prob_ml = p['meta'].get('confidence')
                 
                 if prob_ml:
-                    cote_key = "cote_x" if p["prediction"].upper() in ["N", "X"] else f"cote_{p['prediction'].lower()}"
-                    cote_val = p.get(cote_key)
+                    cote_val = _resolve_market_odds(p, p['prediction'])
                     mise_ar = kelly.calculate_kelly_stake(
                         probability=prob_ml,
                         odds=float(cote_val) if cote_val else 0,
@@ -344,7 +411,7 @@ def _selectionner_meilleurs_matchs_ameliore_internal(conn, session_id, journee):
 
             fonds_suffisants, current_bankroll = deduct_prisma_funds(mise_ar)
             if fonds_suffisants:
-                cote_val = p.get('cote_1') if p['prediction'] == '1' else (p.get('cote_x') if p['prediction'] in ['X', 'N'] else p.get('cote_2'))
+                cote_val = _resolve_market_odds(p, p['prediction'])
                 enregistrer_pari(
                     PariRecord(
                         session_id=session_id,
@@ -525,6 +592,9 @@ def obtenir_predictions_zeus_journee(journee: int) -> List[Dict]:
                 
                 if validation_result.status != ValidationStatus.ACCEPTED:
                     logger.warning(f"[RISK-ENGINE] Pari ZEUS refusé: {validation_result.message}")
+                    if validation_result.reason and validation_result.reason.name in ['GLOBAL_LIMIT_REACHED', 'AGENT_LIMIT_REACHED']:
+                        print_verbose("   🛑 [RISK-ENGINE] Limite globale ou agent atteinte, arrêt des tentatives ZEUS pour cette journée.")
+                        break
                     continue
                 
                 # Exécution du pari simple
@@ -575,9 +645,15 @@ def obtenir_predictions_zeus_journee(journee: int) -> List[Dict]:
     return all_predictions
 
 def check_training_needs():
-    """Vérification robuste des besoins d'entraînement (Session + Volume)."""
+    """Vérification robuste des besoins d'entraînement (Session + Volume).
+    
+    Évite le double entraînement en vérifiant si un entraînement récent a eu lieu
+    (transition de session gérée par api_monitor.py).
+    """
     try:
         from prisma import xgboost_model
+        from datetime import datetime, timedelta
+        
         with get_db_connection() as conn:
             active_session = get_active_session(conn=conn)
             if not active_session:
@@ -594,17 +670,34 @@ def check_training_needs():
             # 2. Vérifier les métadonnées pour changement de session
             meta = xgboost_model.get_model_metadata()
             last_session = meta.get('last_training_session', 0) if meta else 0
+            last_training_time = meta.get('trained_at') if meta else None
             
+            # Si transition de session détectée, vérifier si entraînement récent
             if current_session_id > last_session:
+                # Vérifier si entraînement déjà fait récemment (moins de 5 minutes)
+                if last_training_time:
+                    try:
+                        last_time = datetime.fromisoformat(last_training_time.replace('Z', '+00:00'))
+                        time_since_training = datetime.now() - last_time.replace(tzinfo=None)
+                        if time_since_training < timedelta(minutes=5):
+                            logger.info(f"[IA-BOOSTER] Entraînement déjà effectué récemment ({time_since_training.seconds}s), skip transition")
+                            return False
+                    except Exception:
+                        pass  # Si erreur parsing date, continuer avec entraînement
+                
                 logger.info(f"[IA-BOOSTER] Transition de session détectée ({last_session} -> {current_session_id})")
                 return True
 
             # 3. Vérification par volume (toutes les 10 journées)
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(id) AS cnt FROM matches WHERE session_id = %s AND score_dom IS NOT NULL", (current_session_id,))
-            matchs_termines = cursor.fetchone()['cnt']
+            # Mais seulement si la session actuelle a déjà été entraînée
+            if last_session == current_session_id:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(id) AS cnt FROM matches WHERE session_id = %s AND score_dom IS NOT NULL", (current_session_id,))
+                matchs_termines = cursor.fetchone()['cnt']
+                
+                return matchs_termines > 0 and matchs_termines % 10 == 0
             
-            return matchs_termines > 0 and matchs_termines % 10 == 0
+            return False
             
     except Exception as e:
         logger.warning(f"[IA-BOOSTER] Erreur vérification training: {e}")
@@ -681,7 +774,7 @@ def mettre_a_jour_scoring():
                 if sd is None or se is None:
                     continue
                 resultat_reel = "1" if sd > se else ("2" if se > sd else "X")
-                succes = 1 if resultat_reel == pred else 0
+                succes = 1 if _prediction_matches_result(pred, resultat_reel) else 0
                 cursor.execute('''
                     UPDATE predictions 
                     SET resultat = %s, succes = %s

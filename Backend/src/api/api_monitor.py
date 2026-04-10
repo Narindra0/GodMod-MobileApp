@@ -13,7 +13,7 @@ from src.api.api_client import get_ranking, get_recent_results, get_upcoming_mat
 from src.api.db_integration import insert_api_matches, insert_api_ranking, insert_api_results
 from src.api.matches_filter import extract_matches_with_local_ids
 from src.api.results_filter import extract_results_minimal
-from core.console import (
+from src.core.console import (
     console,
     create_panel,
     create_table,
@@ -24,8 +24,8 @@ from core.console import (
     print_verbose,
     print_warning,
 )
-from core.database import get_db_connection
-from core.session_manager import get_active_session, update_session_day
+from src.core.database import get_db_connection
+from src.core.session_manager import get_active_session, update_session_day
 from src.zeus.training.self_improvement import trigger_zeus_improvement
 
 logger = logging.getLogger(__name__)
@@ -36,28 +36,59 @@ MONITOR_CONFIG = {
     "LOG_ACTIVITY": True,
 }
 
-def launch_background_transition_tasks(old_session_id: int):
-    """Lance l'Audit IA et l'entraînement PRISMA en asynchrone pour la transition de session."""
+def launch_background_transition_tasks(old_session_id: int, new_session_id: int = None):
+    """Lance l'Audit IA et le pipeline complet PRISMA Intelligence++ sur transition de session.
+    
+    Args:
+        old_session_id: ID de la session précédente (pour l'audit)
+        new_session_id: ID de la nouvelle session (pour l'entraînement)
+    """
     from src.analysis.ai_booster import perform_cycle_audit_async
+    from src.prisma.orchestrator import PrismaIntelligenceOrchestrator
+    from src.prisma.training_status import status_manager
     
     print_info("⏳ Lancement de l'Audit IA Booster de la session précédente...")
     if old_session_id:
         # Audit rétrospectif sur la fin de session (ex: J38)
         perform_cycle_audit_async(38, old_session_id)
+    
+    def _run_prisma_pipeline():
+        """Exécute le pipeline complet PRISMA (train + validate + feedback)."""
+        from src.core.database import get_db_connection
         
-    def _train_prisma():
-        from core.database import get_db_connection
-        from src.prisma.ensemble import train_ensemble
+        console.print("[yellow]🔄 PRISMA: Pipeline Intelligence++ en arrière-plan lancé...[/yellow]")
+        status_manager.update_global(is_training=True, description="Transition session - Pipeline complet")
         
-        console.print("[yellow]🔄 PRISMA: Entraînement adaptatif en arrière-plan lancé...[/yellow]")
         try:
             with get_db_connection(write=True) as conn:
-                train_ensemble(conn, force=True)
-            console.print("[bold green]✅ PRISMA: Entraînement terminé avec succès ![/bold green]")
+                # Forcer l'entraînement sur transition de session
+                orchestrator = PrismaIntelligenceOrchestrator(conn, force_training=True)
+                results = orchestrator.run_full_pipeline(
+                    steps=['train', 'validate', 'feedback', 'monitor']
+                )
+                
+                # Vérifier succès
+                training_status = results.get('training', {}).get('status', 'unknown')
+                validation_status = results.get('validation', {}).get('status', 'unknown')
+                
+                if training_status == 'success' and validation_status == 'success':
+                    console.print("[bold green]✅ PRISMA: Pipeline terminé avec succès ![/bold green]")
+                    status_manager.update_global(is_training=False, description="Pipeline terminé - Transition session")
+                elif training_status == 'success':
+                    console.print("[bold yellow]⚠️ PRISMA: Entraînement OK mais validation avertissements[/bold yellow]")
+                    status_manager.update_global(is_training=False, description="Entraînement OK - Validation partielle")
+                else:
+                    console.print("[bold red]❌ PRISMA: Échec du pipeline[/bold red]")
+                    status_manager.update_global(is_training=False, description="Échec pipeline transition session")
+                    
         except Exception as e:
-            console.print(f"[bold red]❌ PRISMA: Échec de l'entraînement: {e}[/bold red]")
-            
-    threading.Thread(target=_train_prisma, daemon=True).start()
+            console.print(f"[bold red]❌ PRISMA: Échec critique du pipeline: {e}[/bold red]")
+            status_manager.update_global(is_training=False, description=f"Erreur: {str(e)[:50]}")
+            import logging
+            logging.getLogger(__name__).error(f"[PRISMA-PIPELINE] Échec transition session: {e}", exc_info=True)
+    
+    # Lancer les 3 tâches en parallèle (daemon threads)
+    threading.Thread(target=_run_prisma_pipeline, daemon=True).start()
     threading.Thread(target=trigger_zeus_improvement, daemon=True).start()
 
 
@@ -158,7 +189,7 @@ def collect_full_data(journee: int) -> bool:
         if new_state["id"] != session_id:
             console.rule("[bold magenta]TRANSITION DE SESSION EFFECTUEE (37 JOURS ATTEINTS)[/]")
             print_success(f"Nouvelle session active : {new_state['id']}")
-            launch_background_transition_tasks(session_id)
+            launch_background_transition_tasks(session_id, new_state["id"])
         # Vider le cache pour que le prochain cycle d'IA utilise les données fraîches
         vider_cache_intelligence()
     console.print()
@@ -205,7 +236,7 @@ def _start_new_cycle(last_journee_db: int, callback_on_new_journee) -> int:
     new_session = update_session_day(active_session["id"], 38 if last_journee_db >= 37 else 1)
     session_id = new_session["id"]
     print_info("Lancement du cycle d'amelioration ZEUS en arriere-plan...")
-    launch_background_transition_tasks(active_session["id"])
+    launch_background_transition_tasks(active_session["id"], session_id)
     print_step("Collecte des cotes pour J1")
     try:
         matches_raw = get_upcoming_matches()

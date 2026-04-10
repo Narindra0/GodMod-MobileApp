@@ -115,7 +115,6 @@ def callback_predictions_ia(journee: int):
             selections_prisma = intelligence.selectionner_meilleurs_matchs(journee_prediction)
         print_verbose("   [dim][BANK] Mode: ZEUS RL (Autonomous Agent)[/]")
         selections_zeus = intelligence.obtenir_predictions_zeus_journee(journee_prediction)
-        prisma_map = {f"{s['equipe_dom']} vs {s['equipe_ext']}": s for s in selections_prisma}
         bankroll = config.DEFAULT_BANKROLL  # Bankroll par defaut
 
         # Récupération immédiate des soldes réels pour affichage et diagnostic
@@ -166,26 +165,35 @@ def callback_predictions_ia(journee: int):
         if selections_zeus:
             print_success(f"Analyses ZEUS terminees pour J{journee_prediction}")
             table = create_table(
-                ["Match", "PRISMA Conf.", "ZEUS Decision", "Mise (Ar)"],
+                ["Match", "ZEUS Decision", "Mise (Ar)"],
                 title=f"GODMOD x ZEUS - STRATEGIE J{journee_prediction}",
             )
-            for z_sel in selections_zeus:
+            # Détecter si un pari combiné existe
+            combined_matches = [z for z in selections_zeus if z.get('in_multiple')]
+            simple_matches = [z for z in selections_zeus if not z.get('in_multiple')]
+            
+            # Afficher d'abord le combiné s'il existe
+            if combined_matches:
+                # La mise totale du combiné est dans MONTANT_FIXE_MULTIPLE (1000 Ar)
+                total_combined_mise = config.MONTANT_FIXE_MULTIPLE
+                nb_matches_combined = len(combined_matches)
+                for i, z_sel in enumerate(combined_matches):
+                    match_name = f"{z_sel['equipe_dom']} vs {z_sel['equipe_ext']}"
+                    decision_zeus = z_sel["decision_formatee"]
+                    # Premier match: affiche la mise totale du combiné
+                    if i == 0:
+                        mise_str = f"[bold yellow]COMBI {nb_matches_combined}×[/] {total_combined_mise:,} Ar"
+                    else:
+                        mise_str = "[dim]↳ combiné[/]"
+                    table.add_row(match_name, decision_zeus, mise_str)
+            
+            # Puis les paris simples
+            for z_sel in simple_matches:
                 match_name = f"{z_sel['equipe_dom']} vs {z_sel['equipe_ext']}"
-                p_sel = prisma_map.get(match_name)
-                if p_sel:
-                    fiabilite = p_sel.get("fiabilite", 0)
-                    fiab_str = f"{fiabilite:.1f}%"
-                    pred_type = p_sel.get("prediction", "?")
-                    fiab_str = (
-                        f"[bold green]{pred_type} ({fiab_str})[/]"
-                        if fiabilite >= 75
-                        else f"[green]{pred_type} ({fiab_str})[/]"
-                    )
-                else:
-                    fiab_str = "[dim]N/A (Rejet)[/]"
                 decision_zeus = z_sel["decision_formatee"]
                 mise_str = f"{z_sel['mise_ar']:,} Ar" if z_sel["pari_type"] != "Aucun" else "-"
-                table.add_row(match_name, fiab_str, decision_zeus, mise_str)
+                table.add_row(match_name, decision_zeus, mise_str)
+            
             console.print(table)
             console.print(f"   [bold white]Portefeuille [green]ZEUS[/]   :[/][bold green] {br_zeus:,} Ar[/]")
             console.print(f"   [bold white]Portefeuille [magenta]PRISMA[/] :[/][bold magenta] {br_prisma:,} Ar[/]")
@@ -194,14 +202,29 @@ def callback_predictions_ia(journee: int):
 
         from src.core.prisma_finance import is_prisma_stop_loss_active
 
-        if is_prisma_stop_loss_active() or br_zeus < config.BANKROLL_STOP_LOSS:
+        # Détecter quel agent a déclenché le stop-loss pour un message plus précis
+        prisma_sl = is_prisma_stop_loss_active()
+        zeus_sl = br_zeus < config.BANKROLL_STOP_LOSS
+        
+        if prisma_sl or zeus_sl:
             console.print()
+            # Construire un message spécifique selon l'agent concerné
+            agents_concernes = []
+            if prisma_sl:
+                agents_concernes.append("PRISMA")
+                logger.warning(f"[STOP-LOSS] Bankroll PRISMA ({br_prisma} Ar) sous seuil {config.BANKROLL_STOP_LOSS} Ar")
+            if zeus_sl:
+                agents_concernes.append("ZEUS")
+                logger.warning(f"[STOP-LOSS] Bankroll ZEUS ({br_zeus} Ar) sous seuil {config.BANKROLL_STOP_LOSS} Ar")
+            
+            agents_str = " + ".join(agents_concernes)
             console.print(
                 create_panel(
-                    f"[bold red]MODE RECHERCHE DE FONDS[/]\n[white]Bankroll sous le seuil critique de "
-                    f"{config.BANKROLL_STOP_LOSS} Ar.\n"
-                    f"Toutes les prises de paris sont automatiquement bloquées pour protéger le capital.[/]",
-                    title="[WARN] STOP-LOSS ACTIF",
+                    f"[bold red]MODE RECHERCHE DE FONDS[/]\n[white]Stop-loss déclenché par [bold]{agents_str}[/]\n"
+                    f"Seuil critique: {config.BANKROLL_STOP_LOSS} Ar\n"
+                    f"PRISMA: {br_prisma:,} Ar | ZEUS: {br_zeus:,} Ar\n"
+                    f"Toutes les prises de paris sont bloquées pour protéger le capital.[/]",
+                    title=f"[WARN] STOP-LOSS ACTIF ({agents_str})",
                     style="red",
                 )
             )

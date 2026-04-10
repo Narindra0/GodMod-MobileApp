@@ -2,18 +2,23 @@ import threading
 
 import uvicorn
 from fastapi import FastAPI
-from core import config
-from core.init_data import initialize_all
+from src.core import config
+from src.core.init_data import initialize_all
 
 from .middleware import apply_cors
 from .routes import register_routes
 
 
 def create_app() -> FastAPI:
-    # Initialisation des donnees au demarrage
-    initialize_all()
-
     app = FastAPI(title="GODMOD API", version="1.0.0", docs_url="/docs")
+    # Hugging Face peut exécuter une stack FastAPI/Starlette légèrement différente.
+    # On enregistre donc le hook startup avec un fallback compatible.
+    if hasattr(app, "add_event_handler"):
+        app.add_event_handler("startup", initialize_all)
+    elif hasattr(app, "on_event"):
+        app.on_event("startup")(initialize_all)
+    else:
+        initialize_all()
     apply_cors(app)
     register_routes(app)
     return app

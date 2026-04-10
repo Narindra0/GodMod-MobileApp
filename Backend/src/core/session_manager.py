@@ -14,12 +14,24 @@ def get_active_session(conn=None):
 
 def _get_active_session_internal(conn):
     cursor = conn.cursor()
-    cursor.execute("SELECT id, current_day, capital_initial FROM sessions WHERE status = 'ACTIVE' LIMIT 1")
+    cursor.execute(
+        """
+        SELECT id, current_day, capital_initial, score_prisma
+        FROM sessions
+        WHERE status = 'ACTIVE'
+        LIMIT 1
+        """
+    )
     row = cursor.fetchone()
     if row:
-        return {"id": row["id"], "current_day": row["current_day"], "capital_initial": row["capital_initial"]}
+        return {
+            "id": row["id"],
+            "current_day": row["current_day"],
+            "capital_initial": row["capital_initial"],
+            "score_prisma": row.get("score_prisma", config.DEFAULT_PRISMA_SCORE),
+        }
     else:
-        return create_new_session(conn=conn)
+        return _create_new_session_internal(conn, active_session=None)
 
 
 def create_new_session(previous_capital=None, conn=None):
@@ -29,15 +41,18 @@ def create_new_session(previous_capital=None, conn=None):
         return _create_new_session_internal(conn, previous_capital)
 
 
-def _create_new_session_internal(conn, previous_capital=None):
+def _create_new_session_internal(conn, previous_capital=None, active_session=...):
     cursor = conn.cursor()
-    cursor.execute("SELECT id, capital_initial, score_prisma FROM sessions WHERE status = 'ACTIVE' LIMIT 1")
-    active = cursor.fetchone()
-    capital_to_use = previous_capital or 20000
-    prisma_to_use = 200
+    if active_session is ...:
+        cursor.execute("SELECT id, capital_initial, score_prisma FROM sessions WHERE status = 'ACTIVE' LIMIT 1")
+        active = cursor.fetchone()
+    else:
+        active = active_session
+    capital_to_use = previous_capital or config.DEFAULT_BANKROLL
+    prisma_to_use = config.DEFAULT_PRISMA_SCORE
     if active:
         active_id = active["id"]
-        prisma_to_use = active["score_prisma"]
+        prisma_to_use = active.get("score_prisma", config.DEFAULT_PRISMA_SCORE)
         cursor.execute(
             "SELECT bankroll_apres FROM historique_paris WHERE session_id = %s ORDER BY id_pari DESC LIMIT 1",
             (active_id,),

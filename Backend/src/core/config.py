@@ -12,6 +12,7 @@ LOGS_DIR = os.path.join(BASE_DIR, "logs")
 ZEUS_MODEL_PATH = os.path.join(MODELS_DIR, "zeus", "zeus_v2_best.zip")
 ZEUS_LOGS_DIR = os.path.join(LOGS_DIR, "zeus")
 DEFAULT_BANKROLL = 20000
+DEFAULT_PRISMA_SCORE = 200
 DEFAULT_CORS_ORIGINS = ["*"]
 API_HOST = os.getenv("API_HOST", "0.0.0.0")
 API_PORT = int(os.getenv("API_PORT", "7860"))

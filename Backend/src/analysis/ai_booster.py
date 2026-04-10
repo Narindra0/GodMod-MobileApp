@@ -206,8 +206,8 @@ def _get_ai_audit_report(data_text: str) -> dict:
                     "temperature": 0.4
                 }
                 
-                # Timeout scindé : 10s pour la connexion, 80s pour la lecture
-                response = requests.post(endpoint, json=payload, headers=headers, timeout=(10, 80))
+                # Timeout scindé : 10s pour la connexion, 180s (3min) pour la lecture
+                response = requests.post(endpoint, json=payload, headers=headers, timeout=(10, 180))
                 if response.status_code == 200:
 
                     result = response.json()
@@ -228,7 +228,7 @@ def _get_ai_audit_report(data_text: str) -> dict:
             except requests.exceptions.ConnectTimeout:
                 logger.warning(f"[AI-AUDIT] Timeout connexion Ollama sur {endpoint} (10s)")
             except requests.exceptions.ReadTimeout:
-                logger.warning(f"[AI-AUDIT] Timeout lecture Ollama sur {endpoint} (80s)")
+                logger.warning(f"[AI-AUDIT] Timeout lecture Ollama sur {endpoint} (180s / 3min)")
             except Exception as e:
                 logger.warning(f"[AI-AUDIT] Erreur connexion Ollama sur {endpoint}: {e}")
 

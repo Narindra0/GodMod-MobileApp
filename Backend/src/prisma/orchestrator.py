@@ -29,11 +29,12 @@ class PrismaIntelligenceOrchestrator:
     Coordonne tous les modules pour une exécution fluide.
     """
     
-    def __init__(self, conn):
+    def __init__(self, conn, force_training: bool = False):
         self.conn = conn
         self.session = get_active_session(conn)
         self.session_id = self.session['id'] if self.session else None
         self.results = {}
+        self.force_training = force_training
         
     def run_full_pipeline(self, steps: list = None) -> dict:
         """
@@ -111,7 +112,8 @@ class PrismaIntelligenceOrchestrator:
         
         try:
             from prisma.ensemble import train_ensemble
-            success = train_ensemble(self.conn)
+            # Forcer l'entraînement si demandé (ex: transition de session)
+            success = train_ensemble(self.conn, force=self.force_training)
             self.results[ 'training' ] = { 'status': 'success' if success else 'failed' }
             if success:
                 logger.info("✅ Entraînement terminé avec succès")

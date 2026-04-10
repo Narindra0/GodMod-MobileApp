@@ -65,10 +65,13 @@ def _generer_pari_internal(conn, journee, selection, session_id, active_session,
                         WHEN %s = '1' THEN cote_1
                         WHEN %s IN ('X', 'N') THEN cote_x
                         WHEN %s = '2' THEN cote_2
+                        WHEN %s = '1X' THEN cote_1x
+                        WHEN %s = '12' THEN cote_12
+                        WHEN %s = 'X2' THEN cote_x2
                     END AS case
                 FROM matches WHERE id = %s
             """,
-                (p["prediction"], p["prediction"], p["prediction"], p["match_id"]),
+                (p["prediction"], p["prediction"], p["prediction"], p["prediction"], p["prediction"], p["prediction"], p["match_id"]),
             )
             row = cursor.fetchone()
             if row and row["case"]:
