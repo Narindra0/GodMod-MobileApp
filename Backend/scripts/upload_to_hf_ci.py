@@ -13,15 +13,21 @@ from datetime import datetime
 PROJECT_DIR = Path(__file__).parent.parent.absolute()
 MODELS_DIR = PROJECT_DIR / 'models' / 'prisma'
 
-# Si on est dans un sous-dossier Backend, ajuster les chemins
+# Détecter si on est dans un repo Git (la racine avec .git)
+GIT_ROOT = PROJECT_DIR
 if PROJECT_DIR.name == 'Backend':
-    # On est déjà au bon niveau
-    pass
+    # On est dans Backend/, la racine git est au-dessus
+    git_parent = PROJECT_DIR.parent / '.git'
+    if git_parent.exists():
+        GIT_ROOT = PROJECT_DIR.parent
 else:
-    # Chercher le dossier Backend
-    backend_dir = PROJECT_DIR / 'Backend'
-    if backend_dir.exists():
-        MODELS_DIR = backend_dir / 'models' / 'prisma'
+    # On est peut-être déjà à la racine
+    if not (PROJECT_DIR / '.git').exists():
+        # Chercher le .git
+        for parent in PROJECT_DIR.parents:
+            if (parent / '.git').exists():
+                GIT_ROOT = parent
+                break
 
 def get_required_files():
     """Retourne la liste des fichiers requis"""
@@ -71,20 +77,20 @@ def upload_via_git():
     
     try:
         # S'assurer que git lfs est configuré
-        for pattern in ['models/**/*.json', 'models/**/*.cbm']:
+        for pattern in ['Backend/models/**/*.json', 'Backend/models/**/*.cbm']:
             subprocess.run(
                 ['git', 'lfs', 'track', pattern],
-                cwd=PROJECT_DIR,
+                cwd=GIT_ROOT,
                 capture_output=True
             )
         
         # Stager les fichiers modèles
         print("\n➕ Ajout des fichiers...")
         for file in get_required_files():
-            path = f"models/prisma/{file}"
+            path = f"Backend/models/prisma/{file}"
             subprocess.run(
                 ['git', 'add', '-f', path],
-                cwd=PROJECT_DIR,
+                cwd=GIT_ROOT,
                 capture_output=True
             )
             print(f"  ✅ {file}")
@@ -93,7 +99,7 @@ def upload_via_git():
         print("\n💾 Commit...")
         result = subprocess.run(
             ['git', 'commit', '-m', commit_msg],
-            cwd=PROJECT_DIR,
+            cwd=GIT_ROOT,
             capture_output=True,
             text=True
         )
@@ -106,7 +112,7 @@ def upload_via_git():
         print("\n🚀 Push vers Hugging Face...")
         result = subprocess.run(
             ['git', 'push', repo_url, 'HEAD:main'],
-            cwd=PROJECT_DIR,
+            cwd=GIT_ROOT,
             capture_output=True,
             text=True,
             timeout=120

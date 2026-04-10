@@ -25,7 +25,7 @@ sys.path.insert(0, src_dir)
 from src.core.db.database import get_db_connection
 from src.core.system.session_manager import get_active_session
 from prisma.orchestrator import PrismaIntelligenceOrchestrator
-from prisma.training_status import status_manager
+from prisma.training.training_status import status_manager
 
 
 def print_progress():

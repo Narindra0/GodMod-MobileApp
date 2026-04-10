@@ -9,9 +9,6 @@ jobs:
   train:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    defaults:
-      run:
-        working-directory: ./Backend
     
     steps:
       - name: Checkout repository
@@ -27,7 +24,11 @@ jobs:
           cache: 'pip'
           cache-dependency-path: Backend/requirements.txt
       
+      - name: Add Backend to Python path
+        run: echo "PYTHONPATH=$PYTHONPATH:${{ github.workspace }}/Backend/src" >> $GITHUB_ENV
+      
       - name: Install dependencies
+        working-directory: ./Backend
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -35,6 +36,7 @@ jobs:
       - name: Verify database connection
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        working-directory: ./Backend
         run: |
           python -c "
           import psycopg2
@@ -51,11 +53,15 @@ jobs:
       - name: Train PRISMA models
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PYTHONPATH: ${{ github.workspace }}/Backend/src
+        working-directory: ./Backend
         run: |
           echo "🏋️ Starting PRISMA training..."
+          echo "PYTHONPATH=$PYTHONPATH"
           python scripts/local_training.py --force --no-monitor
       
       - name: Verify models created
+        working-directory: ./Backend
         run: |
           echo "🔍 Verifying trained models..."
           ls -lh models/prisma/
@@ -67,7 +73,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: prisma-models-${{ github.run_id }}
-          path: models/prisma/*
+          path: Backend/models/prisma/*
           retention-days: 30
       
       - name: Configure git for HF
@@ -78,13 +84,15 @@ jobs:
           git config --global user.email "actions@github.com"
           git config --global user.name "GitHub Actions"
           git remote add hf https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE_ID} || true
-          git lfs track "models/**/*.json"
-          git lfs track "models/**/*.cbm"
+          git lfs track "Backend/models/**/*.json"
+          git lfs track "Backend/models/**/*.cbm"
       
       - name: Push models to Hugging Face
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_SPACE_ID: ${{ secrets.HF_SPACE_ID }}
+          PYTHONPATH: ${{ github.workspace }}/Backend/src
+        working-directory: ./Backend
         run: |
           echo "📤 Uploading to Hugging Face..."
           python scripts/upload_to_hf_ci.py
