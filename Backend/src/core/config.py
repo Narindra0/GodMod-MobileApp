@@ -140,10 +140,5 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 
-# --- Intégration IA Ollama (Prioritaire si activé) ---
-OLLAMA_ENABLED = os.getenv("OLLAMA_ENABLED", "True").lower() == "true"
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://185.77.96.180:3000")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
-OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY", "")
 
 

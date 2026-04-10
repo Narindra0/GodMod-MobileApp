@@ -172,66 +172,8 @@ def _extract_json(text: str) -> dict:
 
 def _get_ai_audit_report(data_text: str) -> dict:
     """Interroge l'IA pour générer le rapport d'audit.
-    Priorité : Ollama (Local/VPS) -> OpenRouter -> Gemini -> Groq.
+    Priorité : OpenRouter -> Gemini -> Groq.
     """
-    # 0. Tentative avec Ollama (Prioritaire si activé)
-    if getattr(config, "OLLAMA_ENABLED", False):
-        ollama_url = getattr(config, "OLLAMA_URL", "http://localhost:11434")
-        ollama_model = getattr(config, "OLLAMA_MODEL", "llama3")
-        ollama_key = getattr(config, "OLLAMA_API_KEY", "")
-        
-        # Headers pour l'authentification (Open WebUI utilise souvent des clés API)
-        headers = {"Content-Type": "application/json"}
-        if ollama_key:
-            headers["Authorization"] = f"Bearer {ollama_key}"
-        
-        # On tente l'endpoint standard Ollama et l'endpoint compatible OpenAI (Open WebUI)
-        endpoints = [
-            f"{ollama_url}/api/chat", # Standard Ollama
-            f"{ollama_url}/api/chat/completions", # Open WebUI / OpenAI compatible
-        ]
-        
-        for endpoint in endpoints:
-            try:
-                logger.info(f"[AI-AUDIT] Appel de Ollama ({ollama_model}) sur {endpoint}...")
-                
-                # Format Payload (On tente un format compatible Chat)
-                payload = {
-                    "model": ollama_model,
-                    "messages": [
-                        {"role": "system", "content": _SYSTEM_PROMPT_AUDIT},
-                        {"role": "user", "content": data_text}
-                    ],
-                    "stream": False,
-                    "temperature": 0.4
-                }
-                
-                # Timeout scindé : 10s pour la connexion, 180s (3min) pour la lecture
-                response = requests.post(endpoint, json=payload, headers=headers, timeout=(10, 180))
-                if response.status_code == 200:
-
-                    result = response.json()
-                    
-                    # Extraction selon l'API (Ollama vs OpenAI)
-                    if 'message' in result: # Format Ollama
-                        raw_content = result['message']['content']
-                    elif 'choices' in result: # Format OpenAI
-                        raw_content = result['choices'][0]['message']['content']
-                    else:
-                        continue
-                        
-                    logger.info(f"[AI-AUDIT] Rapport généré avec succès par Ollama ({endpoint}).")
-                    parsed = _extract_json(raw_content)
-                    if parsed: return parsed
-                else:
-                    logger.warning(f"[AI-AUDIT] Échec Ollama {endpoint} ({response.status_code})")
-            except requests.exceptions.ConnectTimeout:
-                logger.warning(f"[AI-AUDIT] Timeout connexion Ollama sur {endpoint} (10s)")
-            except requests.exceptions.ReadTimeout:
-                logger.warning(f"[AI-AUDIT] Timeout lecture Ollama sur {endpoint} (180s / 3min)")
-            except Exception as e:
-                logger.warning(f"[AI-AUDIT] Erreur connexion Ollama sur {endpoint}: {e}")
-
     # 1. Tentative avec OpenRouter (Principal + Fallbacks internes)
 
     openrouter_key = getattr(config, "OPENROUTER_API_KEY", None)

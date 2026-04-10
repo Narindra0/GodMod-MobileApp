@@ -174,8 +174,15 @@ def main():
                         help='Désactive la surveillance en temps réel')
     parser.add_argument('--info-only', action='store_true',
                         help='Affiche uniquement les infos des modèles existants')
+    parser.add_argument('--verbose', action='store_true',
+                        help='Active le mode debug pour plus de détails')
     
     args = parser.parse_args()
+
+    if args.verbose:
+        import logging
+        logging.getLogger().setLevel(logging.DEBUG)
+        print("🔍 Mode verbeux activé")
     
     if args.info_only:
         export_models_info()
